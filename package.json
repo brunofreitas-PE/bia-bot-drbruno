@@ -1,0 +1,19 @@
+{
+  "name": "bia-bot-drbruno",
+  "version": "1.0.0",
+  "description": "Bia - assistente de WhatsApp da clínica do Dr. Bruno Freitas",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.19.0",
+    "form-data": "^4.0.0",
+    "googleapis": "^140.0.0"
+  }
+}

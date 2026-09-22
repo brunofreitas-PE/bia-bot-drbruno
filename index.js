@@ -41,6 +41,7 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 const ARQ_SESSOES = path.join(DATA_DIR, 'sessoes.json');
 const ARQ_CONCLUIDOS = path.join(DATA_DIR, 'concluidos.json');
 const ARQ_RESERVAS = path.join(DATA_DIR, 'reservas.json');
+const ARQ_LEADS_FRIOS = path.join(DATA_DIR, 'leadsFrios.json');
 
 function carregarJSON(arquivo, valorPadrao) {
   try {
@@ -57,6 +58,7 @@ function persistirTudo() {
   salvarJSON(ARQ_SESSOES, sessoes);
   salvarJSON(ARQ_CONCLUIDOS, concluidos);
   salvarJSON(ARQ_RESERVAS, reservasHorario);
+  salvarJSON(ARQ_LEADS_FRIOS, leadsFrios);
 }
 
 // ===== 1) CRM =====
@@ -65,6 +67,89 @@ async function registrarConversa(nome, numero, mensagem) {
   await sheets.spreadsheets.values.append({ spreadsheetId: SHEET_ID, range: 'A:D', valueInputOption: 'USER_ENTERED', resource: { values: [[dataHora, nome, numero, mensagem]] } });
   console.log('Registrado no Sheets:', nome, '-', mensagem);
 }
+
+// ===== 1b) ABA "agendamentos": rastreia cada agendamento até 30 dias pós-avaliação =====
+// Colunas: A Data/Hora | B Nome | C Número | D Tratamento | E Situação | F Problema
+//          G Status (a recepção preenche: Compareceu / Faltou / Avaliado)
+//          H Data Avaliação (a Bia preenche sozinha, na 1ª vez que vê "Avaliado")
+//          I Lembretes Enviados (a Bia controla, ex: "1,3,7")
+const ABA_AGENDAMENTOS = 'agendamentos';
+
+async function registrarAgendamentoPlanilha({ nome, numero, tratamento, situacao, problema }) {
+  const dataHora = new Date().toLocaleString('pt-BR');
+  try {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SHEET_ID,
+      range: `${ABA_AGENDAMENTOS}!A:I`,
+      valueInputOption: 'USER_ENTERED',
+      resource: { values: [[dataHora, nome, numero, tratamento, situacao || '-', problema || '-', '', '', '']] }
+    });
+  } catch (err) {
+    console.error('Erro ao registrar em "agendamentos" (a aba existe na planilha?):', err.message);
+  }
+}
+
+function formatarDataISO(data) {
+  return data.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+function diasEntre(dataISOAntiga, hoje) {
+  const antiga = new Date(dataISOAntiga + 'T00:00:00');
+  const diffMs = hoje.setHours(0, 0, 0, 0) - antiga.setHours(0, 0, 0, 0);
+  return Math.round(diffMs / (24 * 60 * 60 * 1000));
+}
+
+const ESTAGIOS_AVALIADO = [
+  { dia: 1, tipo: 'TEXTO', gerar: (nome, problema) => `Oi, ${nome}! Foi um prazer receber você aqui no consultório. Obrigado por confiar em mim para dar esse primeiro passo.\n\nFico muito feliz por ter podido te ouvir, entender sua história e começar a planejar algo que pode transformar seu sorriso — e sua vida.\n\nSei que decisões assim pedem um tempo, e tá tudo bem. Só quero que você saiba: quando estiver pronto(a), estarei aqui pra seguir com você.\n\nConte comigo no que precisar ✨` },
+  { dia: 3, tipo: 'ÁUDIO', gerar: (nome) => `Sabe, ${nome}, muita gente que atendo me diz: 'Se eu soubesse que era assim, teria feito antes'. A verdade é que resolver isso muda a forma como a gente come, fala e até se olha no espelho. Eu fico animado por saber que podemos transformar isso juntos.` },
+  { dia: 7, tipo: 'TEXTO', gerar: (nome, problema) => `Você comentou comigo sobre ${problema || 'o que te incomodava'} e isso ficou comigo. Já acompanhei muitos pacientes assim e vi o quanto o resultado transforma. Ainda está com vontade de cuidar disso?` },
+  { dia: 14, tipo: 'ÁUDIO', gerar: (nome) => `Oi, ${nome}. Estou com alguns horários abrindo essa semana. Se quiser, posso reservar um pra você. A gente começa com calma, mas o importante é dar o primeiro passo. Você merece voltar a sorrir com segurança.` },
+  { dia: 21, tipo: 'TEXTO', gerar: (nome) => `Tudo bem, ${nome}? Só passei pra saber como você está e reforçar que estou aqui se quiser conversar ou tirar dúvidas. Às vezes só falta um empurrãozinho pra gente se cuidar de verdade.` },
+  { dia: 30, tipo: 'TEXTO', gerar: (nome) => `Fiquei na dúvida se você seguiu com outro profissional ou se ainda está pensando em voltar.\n\nMe avisa se quiser conversar de novo — sem compromisso. Tô por aqui.\n\nAproveitando, queria me despedir desse nosso ciclo dizendo que estarei aqui quando quiser retomar. A porta está aberta. 🙏` },
+];
+
+async function verificarFollowupsAvaliados() {
+  if (!DR_WHATSAPP_NUMBER) return;
+  try {
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${ABA_AGENDAMENTOS}!A2:I1000` });
+    const linhas = res.data.values || [];
+    const hoje = new Date();
+    for (let i = 0; i < linhas.length; i++) {
+      const linha = linhas[i];
+      const numeroLinha = i + 2; // planilha começa em 1, e a linha 1 é cabeçalho
+      const [, nome, numero, , situacao, problema, status, dataAvaliacao, lembretesStr] = linha;
+      if ((status || '').trim().toLowerCase() !== 'avaliado') continue;
+
+      let dataAvaliacaoFinal = dataAvaliacao;
+      if (!dataAvaliacaoFinal) {
+        dataAvaliacaoFinal = formatarDataISO(hoje);
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SHEET_ID, range: `${ABA_AGENDAMENTOS}!H${numeroLinha}`, valueInputOption: 'USER_ENTERED', resource: { values: [[dataAvaliacaoFinal]] }
+        });
+      }
+
+      const diasPassados = diasEntre(dataAvaliacaoFinal, new Date());
+      const lembretesJaEnviados = (lembretesStr || '').split(',').map(s => s.trim()).filter(Boolean);
+      const estagio = ESTAGIOS_AVALIADO.find(e => e.dia === diasPassados && !lembretesJaEnviados.includes(String(e.dia)));
+      if (!estagio) continue;
+
+      const mensagemSugerida = estagio.gerar(nome, problema);
+      const aviso = `📋 *Lembrete de follow-up pós-avaliação*\n\n🗓️ Dia ${estagio.dia} — *${nome}* (${numero})\n📎 Tipo: ${estagio.tipo}\n\nMensagem sugerida:\n"${mensagemSugerida}"\n\n(Copie e envie manualmente pro paciente)`;
+      try {
+        await sendTextMessage(DR_WHATSAPP_NUMBER, aviso);
+        lembretesJaEnviados.push(String(estagio.dia));
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SHEET_ID, range: `${ABA_AGENDAMENTOS}!I${numeroLinha}`, valueInputOption: 'USER_ENTERED', resource: { values: [[lembretesJaEnviados.join(',')]] }
+        });
+        console.log(`Lembrete dia ${estagio.dia} avisado pra equipe sobre ${nome}`);
+      } catch (err) {
+        console.error(`Falha ao avisar lembrete de ${nome}:`, err.response?.data || err.message);
+      }
+    }
+  } catch (err) {
+    console.error('Erro ao verificar follow-ups de avaliados (a aba "agendamentos" existe?):', err.message);
+  }
+}
+setInterval(verificarFollowupsAvaliados, 3 * 60 * 60 * 1000); // checa a cada 3h (granularidade é por dia, então não precisa ser mais frequente)
 
 // ===== 2) BASE DE CONHECIMENTO =====
 let conhecimento = { servicos: [], faq: [], horarios: [] };
@@ -307,6 +392,68 @@ function responder(texto, nome) {
 const sessoes = carregarJSON(ARQ_SESSOES, {});
 const concluidos = carregarJSON(ARQ_CONCLUIDOS, {});
 let reservasHorario = carregarJSON(ARQ_RESERVAS, []); // [{ texto, textoNormalizado, nome, numero, ts }]
+// leadsFrios: quem não virou agendamento (recusou ou abandonou), aguardando follow-up automático
+// { [numero]: { nome, numero, tratamento, motivo, esfriouEm, enviados: { '24h': bool, '48h': bool, '72h': bool } } }
+let leadsFrios = carregarJSON(ARQ_LEADS_FRIOS, {});
+
+function registrarLeadFrio(numero, { nome, tratamento, motivo }) {
+  leadsFrios[numero] = {
+    nome: nome || 'Paciente',
+    numero,
+    tratamento: tratamento || 'nosso atendimento',
+    motivo, // 'recusa' | 'abandono'
+    esfriouEm: Date.now(),
+    enviados: { '3h': false, '8h': false, '20h': false }
+  };
+}
+
+// ===== FOLLOW-UP AUTOMÁTICO DENTRO DA JANELA DE 24H (texto livre, sem template) =====
+// Só funciona enquanto durar a janela de atendimento do WhatsApp (24h desde a última
+// mensagem do paciente). Depois disso, só reengaja com template aprovado pela Meta.
+function textoFollowup3h(nome, tratamento) {
+  return `Oi ${nome}! Vi que você ficou com uma dúvida sobre *${tratamento}* 😊 Ainda quer que eu te ajude a marcar a avaliação? Estou por aqui!`;
+}
+function textoFollowup8h(nome, tratamento) {
+  return `Oi ${nome}! Só passando pra saber se você ainda tem interesse em cuidar do(a) *${tratamento}* 💙 A avaliação com o Dr. Bruno não tem custo nem compromisso — quer que eu reserve um horário pra você?`;
+}
+function textoFollowup20h(nome, tratamento) {
+  return `Oi ${nome}! Essa é a última vez que te chamo por hoje 😊 Se ainda quiser saber mais sobre *${tratamento}* ou marcar sua avaliação sem compromisso, é só responder por aqui.`;
+}
+
+async function verificarFollowups() {
+  const agora = Date.now();
+  const HORA = 60 * 60 * 1000;
+  for (const numero of Object.keys(leadsFrios)) {
+    const lead = leadsFrios[numero];
+    const horasPassadas = (agora - lead.esfriouEm) / HORA;
+    try {
+      if (horasPassadas >= 3 && !lead.enviados['3h']) {
+        await sendTextMessage(numero, textoFollowup3h(lead.nome, lead.tratamento));
+        lead.enviados['3h'] = true;
+        console.log(`Follow-up 3h enviado pra ${lead.nome} (${numero})`);
+        continue; // no máximo 1 envio por lead a cada checagem, evita rajada se o servidor ficou fora do ar
+      }
+      if (horasPassadas >= 8 && !lead.enviados['8h']) {
+        await sendTextMessage(numero, textoFollowup8h(lead.nome, lead.tratamento));
+        lead.enviados['8h'] = true;
+        console.log(`Follow-up 8h enviado pra ${lead.nome} (${numero})`);
+        continue;
+      }
+      if (horasPassadas >= 20 && !lead.enviados['20h']) {
+        await sendTextMessage(numero, textoFollowup20h(lead.nome, lead.tratamento));
+        lead.enviados['20h'] = true;
+        console.log(`Follow-up 20h enviado pra ${lead.nome} (${numero})`);
+      }
+      // Depois de 24h sem nenhuma resposta, para de tentar (a janela de texto livre já fechou;
+      // reengajar depois disso exigiria um template aprovado pela Meta — não implementado ainda).
+      if (horasPassadas >= 24) delete leadsFrios[numero];
+    } catch (err) {
+      console.error(`Falha ao enviar follow-up pra ${numero}:`, err.response?.data || err.message);
+    }
+  }
+  persistirTudo();
+}
+setInterval(verificarFollowups, 15 * 60 * 1000); // checa a cada 15min
 
 // ===== TIMEOUT DE SESSÃO / ABANDONO =====
 const TIMEOUT_ABANDONO_MS = 3 * 60 * 60 * 1000; // 3h sem responder = considera abandonado
@@ -317,6 +464,7 @@ function verificarAbandonos() {
     if (!s.ultimaInteracao || agora - s.ultimaInteracao < TIMEOUT_ABANDONO_MS) continue;
     const espec = ESPECIALIDADES[s.espec] || ESPECIALIDADES.outro;
     registrarConversa(s.nome || 'Sem nome', from, `[BIA-ABANDONO] parou em "${s.step}" | interesse: ${espec.rotulo} | situacao: ${s.respostas?.situacao || '-'} | problema: ${s.respostas?.problema || '-'}`).catch(() => {});
+    registrarLeadFrio(from, { nome: s.nome, tratamento: espec.rotulo, motivo: 'abandono' });
     delete sessoes[from];
   }
   persistirTudo();
@@ -516,6 +664,7 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
       if (recusa) {
         await enviar(`Tranquilo, ${s.nome}! 😊 Vou anotar seu interesse em *${espec.rotulo}* — quando quiser retomar, é só me chamar aqui.\nE qualquer dúvida que surgir, pode me perguntar 💙`);
         registrarConversa(s.nome, from, `[BIA-CAPTACAO] [${classificarLead(s)}] ${espec.rotulo} | situacao: ${s.respostas.situacao || '-'} | problema: ${s.respostas.problema || '-'}`).catch(() => {});
+        registrarLeadFrio(from, { nome: s.nome, tratamento: espec.rotulo, motivo: 'recusa' });
         delete sessoes[from];
         concluidos[from] = Date.now();
         return;
@@ -543,6 +692,7 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
       registrarConversa(s.nome, from, `[BIA-QUALIFICADO] [${classificarLead(s)}] ${espec.rotulo} | horario: ${texto} | situacao: ${s.respostas.situacao || '-'} | problema: ${s.respostas.problema || '-'}${conflito ? ' | ⚠️ POSSÍVEL CONFLITO DE HORÁRIO' : ''}`).catch(() => {});
       reservasHorario.push({ texto, textoNormalizado, nome: s.nome, numero: from, ts: Date.now() });
       notificarAgendamento({ nome: s.nome, numero: from, tratamento: espec.rotulo, horario: texto, conflito: !!conflito }).catch(() => {});
+      registrarAgendamentoPlanilha({ nome: s.nome, numero: from, tratamento: espec.rotulo, situacao: s.respostas.situacao, problema: s.respostas.problema }).catch(() => {});
       delete sessoes[from];
       concluidos[from] = Date.now();
       return;
@@ -561,6 +711,8 @@ app.get('/webhook', (req, res) => {
 
 // Funil ou assistente — roteia um TEXTO (digitado ou transcrito de áudio)
 async function processarTexto(from, texto, nome) {
+  // Se a pessoa respondeu, ela "esquentou" de novo — sai da fila de follow-up automático
+  if (leadsFrios[from]) delete leadsFrios[from];
   // Envio de mensagem NUNCA deve derrubar o registro/CRM/notificação — só loga se falhar
   const enviar = async corpo => {
     try { await sendTextMessage(from, corpo); }

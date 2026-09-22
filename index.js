@@ -9,7 +9,7 @@ const app = express();
 app.use(express.json());
 
 // OPENAI_API_KEY: NOVA variável no .env para a transcrição
-const { WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WEBHOOK_VERIFY_TOKEN, SHEET_ID, KNOWLEDGE_SHEET_ID, GEMINI_API_KEY, DR_WHATSAPP_NUMBER, PORT = 3000 } = process.env;
+const { WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WEBHOOK_VERIFY_TOKEN, SHEET_ID, KNOWLEDGE_SHEET_ID, GEMINI_API_KEY, DR_WHATSAPP_NUMBER, EQUIPE_VIDEO_WHATSAPP_NUMBER, PORT = 3000 } = process.env;
 const GRAPH_API_URL = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
 // Credenciais do Google: aceita tanto o arquivo credentials.json local (dev)
@@ -72,17 +72,20 @@ async function registrarConversa(nome, numero, mensagem) {
 // Colunas: A Data/Hora | B Nome | C Número | D Tratamento | E Situação | F Problema
 //          G Status (a recepção preenche: Compareceu / Faltou / Avaliado)
 //          H Data Avaliação (a Bia preenche sozinha, na 1ª vez que vê "Avaliado")
-//          I Lembretes Enviados (a Bia controla, ex: "1,3,7")
+//          I Lembretes Enviados (sequência pós-avaliação, controlada pela Bia)
+//          J Data Agendamento (ISO) (a Bia preenche sozinha, no momento do agendamento)
+//          K Vídeos Enviados (funil de 7 vídeos pós-agendamento, controlado pela Bia)
 const ABA_AGENDAMENTOS = 'agendamentos';
 
 async function registrarAgendamentoPlanilha({ nome, numero, tratamento, situacao, problema }) {
-  const dataHora = new Date().toLocaleString('pt-BR');
+  const agora = new Date();
+  const dataHora = agora.toLocaleString('pt-BR');
   try {
     await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: `${ABA_AGENDAMENTOS}!A:I`,
+      range: `${ABA_AGENDAMENTOS}!A:K`,
       valueInputOption: 'USER_ENTERED',
-      resource: { values: [[dataHora, nome, numero, tratamento, situacao || '-', problema || '-', '', '', '']] }
+      resource: { values: [[dataHora, nome, numero, tratamento, situacao || '-', problema || '-', '', '', '', formatarDataISO(agora), '']] }
     });
   } catch (err) {
     console.error('Erro ao registrar em "agendamentos" (a aba existe na planilha?):', err.message);
@@ -150,6 +153,57 @@ async function verificarFollowupsAvaliados() {
   }
 }
 setInterval(verificarFollowupsAvaliados, 3 * 60 * 60 * 1000); // checa a cada 3h (granularidade é por dia, então não precisa ser mais frequente)
+verificarFollowupsAvaliados().catch(() => {}); // roda uma vez já na subida, pra erro aparecer no log sem esperar 3h
+
+// ===== 1c) FUNIL DE 7 VÍDEOS PÓS-AGENDAMENTO (aviso interno, envio manual) =====
+// Roda do dia 1 ao dia 7 após o agendamento. Para automaticamente assim que a coluna
+// Status (G) for preenchida (Compareceu/Faltou/Avaliado) — não faz sentido continuar
+// mandando vídeo de "ansiedade pré-consulta" depois que a consulta já aconteceu.
+const VIDEOS_FUNIL = [
+  { dia: 1, legenda: 'Olá, {nome}! Parabéns por dar esse primeiro passo. Preparei esse vídeo pra você assistir 🎥' },
+  { dia: 2, legenda: 'Muita gente sente um friozinho na barriga... Por isso, gravei essa mensagem pra você ❤️' },
+  { dia: 3, legenda: 'Você não está sozinho(a)! Olha só o que eu queria te contar...' },
+  { dia: 4, legenda: 'Quero que você chegue tranquilo(a) na consulta. Assiste esse vídeo que gravei pra você ✨' },
+  { dia: 5, legenda: 'Uma reflexão importante pra você que já deu o primeiro passo...' },
+  { dia: 6, legenda: 'Você já está em movimento! Uma mensagem especial pra você antes da nossa consulta 🙌' },
+  { dia: 7, legenda: 'Amanhã é o grande dia! Estou te esperando de coração aberto. Vai ser um prazer te receber!🙌🏽' },
+];
+
+async function verificarLembretesVideo() {
+  if (!EQUIPE_VIDEO_WHATSAPP_NUMBER) return; // linha ainda não adquirida — fica inativo até configurar
+  try {
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${ABA_AGENDAMENTOS}!A2:K1000` });
+    const linhas = res.data.values || [];
+    for (let i = 0; i < linhas.length; i++) {
+      const linha = linhas[i];
+      const numeroLinha = i + 2;
+      const [, nome, numero, , , , status, , , dataAgendamentoISO, videosStr] = linha;
+      if ((status || '').trim() !== '') continue; // já compareceu/faltou/foi avaliado — funil para aqui
+      if (!dataAgendamentoISO) continue; // registro antigo sem essa coluna preenchida
+
+      const dias = diasEntre(dataAgendamentoISO, new Date());
+      const videosJaEnviados = (videosStr || '').split(',').map(s => s.trim()).filter(Boolean);
+      const video = VIDEOS_FUNIL.find(v => v.dia === dias && !videosJaEnviados.includes(String(v.dia)));
+      if (!video) continue;
+
+      const aviso = `🎥 *Lembrete do funil de vídeos*\n\n🗓️ Dia ${video.dia}/7 — *${nome}* (${numero})\n\nLegenda sugerida:\n"${video.legenda.replace('{nome}', nome)}"\n\n(Envie o Vídeo ${video.dia} manualmente pro paciente com essa legenda)`;
+      try {
+        await sendTextMessage(EQUIPE_VIDEO_WHATSAPP_NUMBER, aviso);
+        videosJaEnviados.push(String(video.dia));
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SHEET_ID, range: `${ABA_AGENDAMENTOS}!K${numeroLinha}`, valueInputOption: 'USER_ENTERED', resource: { values: [[videosJaEnviados.join(',')]] }
+        });
+        console.log(`Lembrete do vídeo ${video.dia} avisado pra equipe sobre ${nome}`);
+      } catch (err) {
+        console.error(`Falha ao avisar lembrete de vídeo de ${nome}:`, err.response?.data || err.message);
+      }
+    }
+  } catch (err) {
+    console.error('Erro ao verificar funil de vídeos:', err.message);
+  }
+}
+setInterval(verificarLembretesVideo, 3 * 60 * 60 * 1000); // checa a cada 3h
+verificarLembretesVideo().catch(() => {}); // roda uma vez já na subida, pra erro aparecer no log sem esperar 3h
 
 // ===== 2) BASE DE CONHECIMENTO =====
 let conhecimento = { servicos: [], faq: [], horarios: [] };

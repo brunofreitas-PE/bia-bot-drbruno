@@ -482,19 +482,25 @@ async function verificarFollowups() {
     const horasPassadas = (agora - lead.esfriouEm) / HORA;
     try {
       if (horasPassadas >= 3 && !lead.enviados['3h']) {
-        await sendTextMessage(numero, textoFollowup3h(lead.nome, lead.tratamento));
+        const msg3h = textoFollowup3h(lead.nome, lead.tratamento);
+        await sendTextMessage(numero, msg3h);
+        registrarConversa(lead.nome, numero, '🤖 ' + msg3h).catch(() => {});
         lead.enviados['3h'] = true;
         console.log(`Follow-up 3h enviado pra ${lead.nome} (${numero})`);
         continue; // no máximo 1 envio por lead a cada checagem, evita rajada se o servidor ficou fora do ar
       }
       if (horasPassadas >= 8 && !lead.enviados['8h']) {
-        await sendTextMessage(numero, textoFollowup8h(lead.nome, lead.tratamento));
+        const msg8h = textoFollowup8h(lead.nome, lead.tratamento);
+        await sendTextMessage(numero, msg8h);
+        registrarConversa(lead.nome, numero, '🤖 ' + msg8h).catch(() => {});
         lead.enviados['8h'] = true;
         console.log(`Follow-up 8h enviado pra ${lead.nome} (${numero})`);
         continue;
       }
       if (horasPassadas >= 20 && !lead.enviados['20h']) {
-        await sendTextMessage(numero, textoFollowup20h(lead.nome, lead.tratamento));
+        const msg20h = textoFollowup20h(lead.nome, lead.tratamento);
+        await sendTextMessage(numero, msg20h);
+        registrarConversa(lead.nome, numero, '🤖 ' + msg20h).catch(() => {});
         lead.enviados['20h'] = true;
         console.log(`Follow-up 20h enviado pra ${lead.nome} (${numero})`);
       }
@@ -839,7 +845,11 @@ app.get('/conversas', async (req, res) => {
   #lista .nome { font-weight:600; color:#111; }
   #lista .numero { font-size:12px; color:#888; }
   #chat { flex:1; overflow-y:auto; padding:20px; }
+  .linha { display:flex; }
+  .linha.bia { justify-content:flex-end; }
   .bubble { max-width:60%; margin:6px 0; padding:8px 12px; border-radius:8px; background:#fff; box-shadow:0 1px 1px rgba(0,0,0,0.1); white-space:pre-wrap; word-break:break-word; }
+  .bubble.bia { background:#d9fdd3; }
+  .quem { font-size:10px; font-weight:600; color:#075e54; margin-bottom:2px; }
   .hora { font-size:10px; color:#999; margin-top:4px; }
   h2 { padding:16px; margin:0; background:#075e54; color:#fff; font-size:16px; position:sticky; top:0; }
   @media (max-width: 700px) { body { flex-direction:column; } #lista { width:100%; max-height:40vh; } }
@@ -864,9 +874,12 @@ app.get('/conversas', async (req, res) => {
     document.getElementById('item-' + i).classList.add('ativo');
     const c = dados[i];
     const chat = document.getElementById('chat');
-    chat.innerHTML = c.mensagens.map(m =>
-      '<div class="bubble">' + escapar(m.mensagem) + '<div class="hora">' + escapar(m.dataHora) + '</div></div>'
-    ).join('');
+    chat.innerHTML = c.mensagens.map(m => {
+      const daBia = m.mensagem.startsWith('🤖 ');
+      const texto = daBia ? m.mensagem.slice(2).trim() : m.mensagem;
+      const rotulo = daBia ? '<div class="quem">Bia</div>' : '';
+      return '<div class="linha' + (daBia ? ' bia' : '') + '"><div class="bubble' + (daBia ? ' bia' : '') + '">' + rotulo + escapar(texto) + '<div class="hora">' + escapar(m.dataHora) + '</div></div></div>';
+    }).join('');
     chat.scrollTop = chat.scrollHeight;
   }
 </script>
@@ -885,7 +898,10 @@ async function processarTexto(from, texto, nome) {
   if (leadsFrios[from]) delete leadsFrios[from];
   // Envio de mensagem NUNCA deve derrubar o registro/CRM/notificação — só loga se falhar
   const enviar = async corpo => {
-    try { await sendTextMessage(from, corpo); }
+    try {
+      await sendTextMessage(from, corpo);
+      registrarConversa(nome, from, '🤖 ' + corpo).catch(() => {});
+    }
     catch (err) { console.error('Falha ao enviar mensagem pro paciente:', err.response?.data || err.message); }
   };
   if (sessoes[from] && !sessoes[from].nome && primeiroNome(nome) && primeiroNome(nome) !== 'Sem') {
@@ -951,7 +967,9 @@ app.post('/webhook', async (req, res) => {
       } else {
         const s = sessoes[from];
         const extra = s ? '\n\n' + retomar(s) : '';
-        await sendTextMessage(from, `Recebi seu áudio, ${primeiroNome(nome)} 😊\nNão consegui ouvir agora — consegue me escrever? Assim não perco nenhum detalhe!${extra}`);
+        const msgFalhaAudio = `Recebi seu áudio, ${primeiroNome(nome)} 😊\nNão consegui ouvir agora — consegue me escrever? Assim não perco nenhum detalhe!${extra}`;
+        await sendTextMessage(from, msgFalhaAudio);
+        registrarConversa(nome, from, '🤖 ' + msgFalhaAudio).catch(() => {});
         persistirTudo();
       }
       return;

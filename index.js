@@ -9,7 +9,7 @@ const app = express();
 app.use(express.json());
 
 // OPENAI_API_KEY: NOVA variável no .env para a transcrição
-const { WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WEBHOOK_VERIFY_TOKEN, SHEET_ID, KNOWLEDGE_SHEET_ID, GEMINI_API_KEY, DR_WHATSAPP_NUMBER, EQUIPE_VIDEO_WHATSAPP_NUMBER, PORT = 3000 } = process.env;
+const { WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WEBHOOK_VERIFY_TOKEN, SHEET_ID, KNOWLEDGE_SHEET_ID, GEMINI_API_KEY, DR_WHATSAPP_NUMBER, EQUIPE_VIDEO_WHATSAPP_NUMBER, ADMIN_PASSWORD, PORT = 3000 } = process.env;
 const GRAPH_API_URL = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
 // Credenciais do Google: aceita tanto o arquivo credentials.json local (dev)
@@ -531,7 +531,16 @@ function iniciarFunil(numero, textoInicial, nomePerfil) {
   const nomeReserva = primeiroNome(nomePerfil || '');
   const nomeInicial = nomeReserva && nomeReserva !== 'Sem' ? nomeReserva : null;
   sessoes[numero] = { step: 'nome', nome: nomeInicial, respostas: {}, especPrevia: especPrimeira !== 'outro' ? especPrimeira : null, urgencia, ultimaInteracao: Date.now(), criadaEm: Date.now() };
-  if (urgencia) return 'Olá! Que alegria receber seu contato 😊! Eu sou a *Bia*, consultora da clínica do Dr. Bruno Freitas.\nSinto muito que esteja com dor 😟 — vamos resolver isso com prioridade!\nMe diz seu nome, por favor? 😊';
+  if (urgencia) {
+    // Se o nome já veio do perfil do WhatsApp, pula direto pra etapa 'urgencia' — senão a
+    // PRÓXIMA mensagem (que é a resposta real sobre a dor) cai na etapa 'nome' de novo e a
+    // pergunta se repete, descartando o que a pessoa realmente disse.
+    if (nomeInicial) {
+      sessoes[numero].step = 'urgencia';
+      return `Olá, ${nomeInicial}! Que alegria receber seu contato 😊! Eu sou a *Bia*, consultora da clínica do Dr. Bruno Freitas.\nSinto muito que esteja com dor 😟 — vamos resolver isso com prioridade!\nMe conta rapidinho o que está sentindo (desde quando dói, o que piora)? 🙏`;
+    }
+    return 'Olá! Que alegria receber seu contato 😊! Eu sou a *Bia*, consultora da clínica do Dr. Bruno Freitas.\nSinto muito que esteja com dor 😟 — vamos resolver isso com prioridade!\nMe diz seu nome, por favor? 😊';
+  }
   return 'Olá! Que alegria receber seu contato 😊! Eu sou a *Bia*, consultora da clínica do Dr. Bruno Freitas.\nQual seu nome? E me conta: você gostaria de transformar o seu sorriso ou cuidar do seu rosto?';
 }
 function menuEspecialidade(nome) {
@@ -594,8 +603,20 @@ function explicarAvaliacao(nome) {
 }
 
 // ===== CLASSIFICAÇÃO DO LEAD (pra priorizar quem chamar primeiro) =====
+// Classifica a resposta à pergunta de Implicação do SPIN ("quanto tempo mais você quer
+// conviver com isso?") — o sinal de qualificação mais forte do funil, porque mede disposição
+// real de agir agora, não só interesse no assunto.
+const SINAIS_URGENCIA_ALTA = ['hoje', 'agora', 'urgente', 'nao aguento mais', 'quanto antes', 'ja', 'imediato', 'anos', 'muito tempo', 'cansei'];
+const SINAIS_URGENCIA_BAIXA = ['sei la', 'nao sei', 'sem pressa', 'tanto faz', 'talvez', 'mais pra frente', 'nao tenho pressa', 'sem prioridade', 'depois'];
+function classificarUrgenciaPercebida(textoNormalizado) {
+  if (TEM(textoNormalizado, SINAIS_URGENCIA_ALTA)) return 'QUENTE';
+  if (TEM(textoNormalizado, SINAIS_URGENCIA_BAIXA)) return 'FRIO';
+  return 'MORNO';
+}
+
 function classificarLead(s) {
   if (s.urgencia) return 'QUENTE (urgência)';
+  if (s.temperaturaLead) return `${s.temperaturaLead} (reação à pergunta de implicação: "${s.respostas?.urgenciaPercebida || '-'}")`;
   if (s.step === 'agenda' && s.orcamentoOk === true) return 'QUENTE';
   if (s.step === 'agenda' && s.orcamentoOk === false) return 'MORNO (agendou, mas achou o valor apertado)';
   if (s.step === 'agenda') return 'QUENTE';
@@ -702,10 +723,18 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
     }
     case 'q4': {
       s.respostas.problema = texto;
-      s.step = 'fechamento';
+      s.step = 'implicacao';
       const reacao = REACOES_CLINICAS.find(r => TEM(t, r.quando));
       const cadImplicacao = reacao ? `${reacao.titulo}: ${reacao.texto.replace('{nome}', s.nome)}\n${espec.implicacao.replace('{nome}', s.nome)}` : espec.implicacao.replace('{nome}', s.nome);
-      await enviar(cadImplicacao);
+      s.perguntaAtual = cadImplicacao;
+      return enviar(cadImplicacao);
+    }
+    case 'implicacao': {
+      // Resposta à pergunta de urgência ("quanto tempo mais quer conviver com isso?") —
+      // esse é o sinal de qualificação mais forte do funil: mede disposição real, não só interesse.
+      s.respostas.urgenciaPercebida = texto;
+      s.temperaturaLead = classificarUrgenciaPercebida(t);
+      s.step = 'fechamento';
       return enviar(espec.necessidade.replace('{nome}', s.nome));
     }
     case 'fechamento': {
@@ -761,6 +790,93 @@ app.get('/webhook', (req, res) => {
   const challenge = req.query['hub.challenge'];
   if (mode === 'subscribe' && token === WEBHOOK_VERIFY_TOKEN) return res.status(200).send(challenge);
   return res.sendStatus(403);
+});
+
+// ===== 8) PAINEL DE CONVERSAS (visualização simples, protegida por senha) =====
+// Acesse: https://SEU-DOMINIO.up.railway.app/conversas?senha=SUA_SENHA
+// A senha vem da variável de ambiente ADMIN_PASSWORD (configure no Railway).
+function escaparHTML(texto) {
+  return (texto || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function jsonSeguroParaScript(dados) {
+  // Evita que "</script>" dentro de uma mensagem do paciente quebre a página
+  return JSON.stringify(dados).replace(/</g, '\\u003c');
+}
+
+app.get('/conversas', async (req, res) => {
+  if (!ADMIN_PASSWORD) return res.status(500).send('Configure a variável ADMIN_PASSWORD no Railway pra habilitar essa página.');
+  if (req.query.senha !== ADMIN_PASSWORD) return res.status(401).send('Acesso negado. Use a URL com ?senha=SUA_SENHA no final.');
+
+  try {
+    const respSheet = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'A:D' });
+    const linhas = (respSheet.data.values || []).filter(l => l[2] && /^\d+$/.test(String(l[2]).trim()));
+
+    const conversas = {};
+    for (const linha of linhas) {
+      const [dataHora, nome, numero, mensagem] = linha;
+      if (!conversas[numero]) conversas[numero] = { nome: nome || numero, mensagens: [] };
+      if (nome) conversas[numero].nome = nome;
+      conversas[numero].mensagens.push({ dataHora: dataHora || '', mensagem: mensagem || '' });
+    }
+
+    const listaConversas = Object.entries(conversas)
+      .map(([numero, dados]) => ({ numero, ...dados }))
+      .sort((a, b) => (b.mensagens.length ? b.mensagens[b.mensagens.length - 1].dataHora : '').localeCompare(a.mensagens.length ? a.mensagens[a.mensagens.length - 1].dataHora : ''));
+
+    const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conversas — Bia</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, sans-serif; background:#e5ddd5; margin:0; padding:0; display:flex; height:100vh; }
+  #lista { width:320px; min-width:320px; overflow-y:auto; background:#fff; border-right:1px solid #ddd; }
+  #lista .item { padding:12px 16px; border-bottom:1px solid #eee; cursor:pointer; }
+  #lista .item:hover { background:#f5f5f5; }
+  #lista .item.ativo { background:#e8f5e9; }
+  #lista .nome { font-weight:600; color:#111; }
+  #lista .numero { font-size:12px; color:#888; }
+  #chat { flex:1; overflow-y:auto; padding:20px; }
+  .bubble { max-width:60%; margin:6px 0; padding:8px 12px; border-radius:8px; background:#fff; box-shadow:0 1px 1px rgba(0,0,0,0.1); white-space:pre-wrap; word-break:break-word; }
+  .hora { font-size:10px; color:#999; margin-top:4px; }
+  h2 { padding:16px; margin:0; background:#075e54; color:#fff; font-size:16px; position:sticky; top:0; }
+  @media (max-width: 700px) { body { flex-direction:column; } #lista { width:100%; max-height:40vh; } }
+</style>
+</head>
+<body>
+<div id="lista">
+  <h2>Conversas (${listaConversas.length})</h2>
+  ${listaConversas.map((c, i) => `
+    <div class="item" onclick="mostrar(${i})" id="item-${i}">
+      <div class="nome">${escaparHTML(c.nome)}</div>
+      <div class="numero">${escaparHTML(c.numero)} · ${c.mensagens.length} msgs</div>
+    </div>
+  `).join('')}
+</div>
+<div id="chat"><p style="color:#999; text-align:center; margin-top:40px;">Selecione uma conversa à esquerda</p></div>
+<script>
+  const dados = ${jsonSeguroParaScript(listaConversas)};
+  function escapar(t) { const d = document.createElement('div'); d.innerText = t; return d.innerHTML; }
+  function mostrar(i) {
+    document.querySelectorAll('#lista .item').forEach(el => el.classList.remove('ativo'));
+    document.getElementById('item-' + i).classList.add('ativo');
+    const c = dados[i];
+    const chat = document.getElementById('chat');
+    chat.innerHTML = c.mensagens.map(m =>
+      '<div class="bubble">' + escapar(m.mensagem) + '<div class="hora">' + escapar(m.dataHora) + '</div></div>'
+    ).join('');
+    chat.scrollTop = chat.scrollHeight;
+  }
+</script>
+</body>
+</html>`;
+    res.send(html);
+  } catch (err) {
+    console.error('Erro ao gerar painel de conversas:', err.message);
+    res.status(500).send('Erro ao carregar conversas: ' + err.message);
+  }
 });
 
 // Funil ou assistente — roteia um TEXTO (digitado ou transcrito de áudio)

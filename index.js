@@ -517,15 +517,23 @@ setInterval(verificarFollowups, 15 * 60 * 1000); // checa a cada 15min
 
 // ===== TIMEOUT DE SESSÃO / ABANDONO =====
 const TIMEOUT_ABANDONO_MS = 3 * 60 * 60 * 1000; // 3h sem responder = considera abandonado
+const LIMPEZA_SESSAO_ABANDONADA_MS = 30 * 24 * 60 * 60 * 1000; // 30 dias sem voltar = limpa de vez
 function verificarAbandonos() {
   const agora = Date.now();
   for (const from of Object.keys(sessoes)) {
     const s = sessoes[from];
+    if (s.abandonado) {
+      // Já foi registrada como esfriada antes — não registra de novo a cada checagem.
+      // Se faz muito tempo e a pessoa nunca mais respondeu, aí sim limpa a sessão da memória.
+      if (agora - s.ultimaInteracao > LIMPEZA_SESSAO_ABANDONADA_MS) delete sessoes[from];
+      continue;
+    }
     if (!s.ultimaInteracao || agora - s.ultimaInteracao < TIMEOUT_ABANDONO_MS) continue;
     const espec = ESPECIALIDADES[s.espec] || ESPECIALIDADES.outro;
     registrarConversa(s.nome || 'Sem nome', from, `[BIA-ABANDONO] parou em "${s.step}" | interesse: ${espec.rotulo} | situacao: ${s.respostas?.situacao || '-'} | problema: ${s.respostas?.problema || '-'}`).catch(() => {});
     registrarLeadFrio(from, { nome: s.nome, tratamento: espec.rotulo, motivo: 'abandono' });
-    delete sessoes[from];
+    // Mantém a sessão viva (não apaga mais) pra poder retomar de onde parou quando a pessoa voltar.
+    s.abandonado = true;
   }
   persistirTudo();
 }
@@ -909,6 +917,16 @@ async function processarTexto(from, texto, nome) {
   }
   try {
     if (sessoes[from]) {
+      const s = sessoes[from];
+      if (s.abandonado) {
+        // Retomando uma conversa que tinha esfriado — reconhece o que a pessoa já tinha dito
+        // em vez de começar o funil do zero, pra não fazer ela repetir tudo de novo.
+        const espec = ESPECIALIDADES[s.espec] || ESPECIALIDADES.outro;
+        const nomeAtual = s.nome ? `${s.nome}, ` : '';
+        const trechoProblema = s.respostas?.problema ? ` Você tinha comentado sobre "${s.respostas.problema}".` : '';
+        await enviar(`Que bom te ver de novo, ${nomeAtual}vamos continuar! 😊 Vi que seu interesse era em *${espec.rotulo}*.${trechoProblema}`);
+        s.abandonado = false;
+      }
       await flowFunil(from, texto, enviar, nome);
     } else {
       const jaPassouFunil = concluidos[from] && (Date.now() - concluidos[from] < 24 * 60 * 60 * 1000);

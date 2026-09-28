@@ -306,8 +306,10 @@ async function transcreverAudio(mediaId, mimeType) {
   });
   const base64 = Buffer.from(audio.data).toString('base64');
 
-  // Passo 3: mandar pro Gemini "escutar" — com retry pra erros transitórios (503/429)
-  const MAX_TENTATIVAS = 3;
+  // Passo 3: mandar pro Gemini "escutar" — com retry pra erros transitórios (503/429).
+  // Picos de instabilidade do Gemini ("high demand") costumam passar em 20-30s, então
+  // usamos mais tentativas com espera maior entre elas pra dar tempo do pico passar.
+  const MAX_TENTATIVAS = 5;
   let ultimoErro;
   for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
     try {
@@ -331,7 +333,7 @@ async function transcreverAudio(mediaId, mimeType) {
       const transitorio = status === 503 || status === 429;
       if (transitorio && tentativa < MAX_TENTATIVAS) {
         console.log(`Gemini instável (${status}), tentativa ${tentativa}/${MAX_TENTATIVAS} — nova tentativa em breve...`);
-        await esperar(tentativa * 1500); // 1.5s, depois 3s
+        await esperar(tentativa * 2500); // 2.5s, 5s, 7.5s, 10s — dá mais tempo pro pico passar
         continue;
       }
       throw ultimoErro;

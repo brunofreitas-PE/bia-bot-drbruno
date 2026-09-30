@@ -61,6 +61,14 @@ function persistirTudo() {
   salvarJSON(ARQ_LEADS_FRIOS, leadsFrios);
 }
 
+// ===== POLÍTICA DE DADOS SENSÍVEIS (LGPD) =====
+// A Bia só coleta o necessário para conduzir o atendimento: nome, contato (número de
+// WhatsApp), motivo da busca e o que o paciente contar espontaneamente sobre sua situação.
+// Nunca pedir CPF, endereço completo ou dados de saúde detalhados via chat. Informação de
+// saúde compartilhada pelo paciente é dado sensível: usada só para o atendimento (registrada
+// no CRM/planilha da clínica) e nunca cruzada ou reaproveitada entre conversas de pacientes
+// diferentes. Ver "Prompt da Bia" (seção 8) no projeto para a política completa.
+
 // ===== 1) CRM =====
 async function registrarConversa(nome, numero, mensagem) {
   const dataHora = new Date().toLocaleString('pt-BR');
@@ -265,6 +273,28 @@ function responderGratuidade(nome) {
   return `Entendo o interesse${comNome} 😊 Hoje não trabalhamos com tratamento gratuito, mas a *avaliação não tem nenhum custo nem compromisso* — você conhece o plano, os valores certinhos pro seu caso e decide com calma depois.\nE pra fechar, temos Pix, cartão ou 40% de entrada + até 10x sem juros, que costuma caber bem no orçamento 💳\nQuer que eu já reserve sua avaliação?`;
 }
 
+// ===== ESCOPO DA BIA: quando fazer handoff pra equipe humana (ver Prompt da Bia / Método BF) =====
+// A Bia não deve tentar responder sozinha: reclamação/insatisfação, pergunta clínica que exige
+// diagnóstico (fora do que está na base de conhecimento) ou pedido explícito de falar com uma
+// pessoa. Nesses casos ela reconhece o pedido com empatia, avisa a equipe e informa que alguém
+// vai continuar — nunca improvisa uma resposta clínica ou promete algo fora do padrão.
+const PALAVRAS_RECLAMACAO = ['reclama', 'insatisfeit', 'processo', 'processar', 'advogado', 'reembolso', 'meu dinheiro de volta', 'cancelar tudo', 'nao ficou bom', 'deu errado', 'doeu muito depois', 'infeccionou', 'inflamou'];
+const PALAVRAS_FALAR_HUMANO = ['falar com uma pessoa', 'falar com alguem', 'falar com atendente', 'quero falar com o dr', 'atendente humano', 'nao e um robo', 'e um robo', 'voce e robo', 'falar com o doutor direto'];
+const PALAVRAS_DIAGNOSTICO = ['o que eu tenho', 'isso e normal', 'pode me diagnosticar', 'qual remedio', 'que remedio eu tomo', 'que medicamento', 'posso tomar', 'quantos mg', 'e grave', 'e cancer'];
+
+function verificarForaEscopo(t) {
+  if (TEM(t, PALAVRAS_FALAR_HUMANO)) return 'humano';
+  if (TEM(t, PALAVRAS_RECLAMACAO)) return 'reclamacao';
+  if (TEM(t, PALAVRAS_DIAGNOSTICO)) return 'diagnostico';
+  return null;
+}
+function mensagemHandoff(motivo, nome1) {
+  const comNome = nome1 ? ', ' + nome1 : '';
+  if (motivo === 'reclamacao') return `Sinto muito${comNome} 😟 Isso é importante e prefiro que o Dr. Bruno ou a equipe cuidem pessoalmente do seu caso. Já vou avisar agora mesmo e alguém retorna o quanto antes.`;
+  if (motivo === 'diagnostico') return `Essa é uma pergunta clínica${comNome}, e o ideal é o Dr. Bruno avaliar pessoalmente pra te dar uma resposta segura — não quero arriscar te dizer algo sem examinar. Vou avisar a equipe pra te orientar melhor 🙏`;
+  return `Claro${comNome}! Vou chamar alguém da equipe pra continuar com você por aqui 😊`;
+}
+
 const FAQ_DIRETAS = [
   { palavras: ['doi', 'machuc', 'anestesi'], indice: 0 },
   { palavras: ['rejeit', 'titanio'], indice: 4 },
@@ -445,6 +475,10 @@ function responder(texto, nome) {
   return `Eu sou a Bia, consultora da clínica do Dr. Bruno Freitas 😊\nPosso te ajudar com:\n\n🦷 Agendar avaliação\n💰 Valores\n⚡ Urgências\n❓ Dúvidas sobre implantes\n\nO que você procura hoje?`;
 }
 
+// ===== MEMÓRIA DE CONVERSA (Método BF, seção 7) =====
+// `sessoes` guarda em que etapa do funil (Contexto→Problema→Impacto→Desejo→Solução→
+// Viabilização→Decisão) cada paciente está, e `retomar()`/o fluxo de abandono (mais abaixo)
+// garantem que, ao voltar, a Bia não repete pergunta já respondida nem reinicia o funil do zero.
 const sessoes = carregarJSON(ARQ_SESSOES, {});
 const concluidos = carregarJSON(ARQ_CONCLUIDOS, {});
 let reservasHorario = carregarJSON(ARQ_RESERVAS, []); // [{ texto, textoNormalizado, nome, numero, ts }]
@@ -694,6 +728,12 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
     await enviar(`Poxa, sinto muito que esteja passando por isso, ${nomeAtual} 😟\nO Dr. Bruno reserva horários para urgências e vai te priorizar.`);
     if (!s.nome) return enviar('Me diz seu nome rapidinho que eu já anoto seu caso como prioridade 🙏');
     return enviar('Me conta rapidinho o que está sentindo? Assim eu já passo tudo pro Dr. Bruno 🙏');
+  }
+  const motivoHandoff = verificarForaEscopo(t);
+  if (motivoHandoff) {
+    await enviar(mensagemHandoff(motivoHandoff, nomeAtual));
+    notificarHandoff({ nome: s.nome, numero: from, motivo: motivoHandoff, texto }).catch(() => {});
+    return enviar(retomar(s));
   }
 
   switch (s.step) {
@@ -946,7 +986,13 @@ async function processarTexto(from, texto, nome) {
     } else {
       const jaPassouFunil = concluidos[from] && (Date.now() - concluidos[from] < 24 * 60 * 60 * 1000);
       if (jaPassouFunil) {
-        await enviar(responder(texto, nome));
+        const motivoHandoff = verificarForaEscopo(normalizar(texto));
+        if (motivoHandoff) {
+          await enviar(mensagemHandoff(motivoHandoff, primeiroNome(nome)));
+          notificarHandoff({ nome, numero: from, motivo: motivoHandoff, texto }).catch(() => {});
+        } else {
+          await enviar(responder(texto, nome));
+        }
       } else {
         await enviar(iniciarFunil(from, texto, nome));
       }
@@ -1013,6 +1059,19 @@ app.post('/webhook', async (req, res) => {
 });
 async function sendTextMessage(to, body) {
   await axios.post(GRAPH_API_URL, { messaging_product: 'whatsapp', to, type: 'text', text: { body } }, { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } });
+}
+
+// ===== NOTIFICAÇÃO PRO DR. BRUNO QUANDO A BIA PRECISA DE HANDOFF (fora do escopo dela) =====
+async function notificarHandoff({ nome, numero, motivo, texto }) {
+  if (!DR_WHATSAPP_NUMBER) return;
+  const numeroFormatado = numero.startsWith('55') ? `+${numero}` : numero;
+  const rotuloMotivo = { reclamacao: 'Reclamação/insatisfação', diagnostico: 'Pergunta clínica fora do escopo da Bia', humano: 'Pediu para falar com uma pessoa' }[motivo] || 'Fora do escopo da Bia';
+  const corpo = `🚨 *Handoff da Bia — precisa de atenção humana*\n\n👤 Paciente: ${nome || 'Sem nome'}\n📱 WhatsApp: ${numeroFormatado}\n📌 Motivo: ${rotuloMotivo}\n💬 Mensagem: "${(texto || '').slice(0, 200)}"\n\nA Bia já avisou o paciente que alguém vai continuar o atendimento.`;
+  try {
+    await sendTextMessage(DR_WHATSAPP_NUMBER, corpo);
+  } catch (err) {
+    console.error('Falha ao notificar handoff pro Dr. Bruno:', err.response?.data || err.message);
+  }
 }
 
 // ===== 7) NOTIFICAÇÃO PRO DR. BRUNO QUANDO ALGUÉM AGENDA =====

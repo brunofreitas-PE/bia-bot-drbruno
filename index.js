@@ -427,7 +427,7 @@ function responder(texto, nome) {
   const direta = FAQ_DIRETAS.find(f => TEM(t, f.palavras));
   if (direta && conhecimento.faq[direta.indice]) return conhecimento.faq[direta.indice].resposta;
   if (TEM(t, ['mais inform', 'informações', 'informacoes', 'infor'])) return infoEspecialidade('outro', nome1);
-  if (TEM(t, ['preço', 'valor', 'custa', 'orçamento'])) return responderPreco(nome1);
+  if (TEM(t, ['preço', 'valor', 'custa', 'orçamento', 'pagamento', 'pagar', 'parcela', 'parcelar', 'quanto e', 'quanto é', 'quanto fica', 'quanto sai'])) return responderPreco(nome1);
   if (TEM(t, ['agendar', 'marcar', 'consulta', 'horário', 'disponível'])) {
     return `Que alegria${comNome}! 😊 O Dr. Bruno atende às sextas, das 14h às 21h.${horariosLivres()}\n\nMe diz o melhor dia e horário que eu já reservo! 🗓️`;
   }
@@ -673,11 +673,11 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
   if (s.step === 'fechamento' && TEM(t, ['vai ver', 'ele ve', 'ele vê', 'avalia', 'o que acontece', 'como e a', 'o que faz'])) {
     return enviar(explicarAvaliacao(s.nome));
   }
-  if (TEM(t, ['preço', 'valor', 'custa', 'orçamento'])) {
+  if (TEM(t, ['preço', 'valor', 'custa', 'orçamento', 'pagamento', 'pagar', 'parcela', 'parcelar', 'quanto e', 'quanto é', 'quanto fica', 'quanto sai'])) {
     await enviar(responderPreco(nomeAtual));
     return enviar(retomar(s));
   }
-  if (TEM(t, ['endereço', 'endereco', 'onde fica', 'localização', 'localizacao', 'como chego', 'onde e', 'onde é', 'qual o local', 'qual a cidade', 'que cidade', 'em que cidade', 'presencial', 'tenho que ir', 'preciso ir', 'vou ter que ir', 'fica longe', 'fica distante', 'moro longe', 'moro a', 'km do', 'km de'])) {
+  if (TEM(t, ['endereço', 'endereco', 'onde fica', 'localização', 'localizacao', 'como chego', 'onde e', 'onde é', 'qual o local', 'cidade e isso', 'cidade é isso', 'qual cidade', 'qual a cidade', 'que cidade', 'em que cidade', 'presencial', 'tenho que ir', 'preciso ir', 'vou ter que ir', 'fica longe', 'fica distante', 'moro longe', 'moro a', 'km do', 'km de', 'sou daqui de', 'sou de'])) {
     const local = conhecimento.horarios.find(h => h.local)?.local || 'Rua Dr. Carlos Chagas, 93, sala 07, Santo Amaro, Recife/PE (perto do Hospital Oswaldo Cruz e do Procape, em frente à farmácia Pague Menos)';
     await enviar(`Estamos na ${local} 😊\nAtendimento às sextas, das 14h às 21h.\nSe a distância for um complicador pra você, me avisa que eu verifico com a equipe a melhor forma de te ajudar 💙`);
     return enviar(retomar(s));

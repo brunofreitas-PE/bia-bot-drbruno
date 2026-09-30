@@ -421,7 +421,7 @@ function responder(texto, nome) {
     return `No momento não atendemos por planos de saúde${comNome} 😕\nMas o Dr. Bruno tem condições especiais: Pix, cartão ou 40% de entrada + 10x sem juros.\nQuer saber o valor de algum tratamento? 😊`;
   }
   if (TEM(t, ['endereço', 'onde fica', 'localização', 'como chego'])) {
-    const local = conhecimento.horarios.find(h => h.local)?.local || 'Rua Dr. Carlos Chagas, 93, sala 07, Santo Amaro, Recife/PE';
+    const local = conhecimento.horarios.find(h => h.local)?.local || 'Rua Dr. Carlos Chagas, 93, sala 07, Santo Amaro, Recife/PE (perto do Hospital Oswaldo Cruz e do Procape, em frente à farmácia Pague Menos)';
     return `Estamos na ${local} 😊\nAtendimento às sextas, das 14h às 21h. Quer que eu verifique um horário pra você?`;
   }
   const direta = FAQ_DIRETAS.find(f => TEM(t, f.palavras));
@@ -568,7 +568,7 @@ function identificarEspecialidade(texto) {
   if (t.includes('2') || t.includes('protese') || t.includes('protocolo') || t.includes('dentadura') || t.includes('peca') || t.includes('caindo')) return 'protese';
   if (t.includes('3') || t.includes('lente')) return 'lentes';
   if (t.includes('4') || t.includes('alinhad') || t.includes('aparelho') || t.includes('dente torto')) return 'alinhadores';
-  if (t.includes('5') || t.includes('harmoniz') || t.includes('rosto') || t.includes('labios') || t.includes('botox') || t.includes('preenchimento')) return 'harmonizacao';
+  if (t.includes('5') || t.includes('harmoniz') || t.includes('hof') || t.includes('rosto') || t.includes('labios') || t.includes('botox') || t.includes('preenchimento')) return 'harmonizacao';
   return 'outro';
 }
 function horariosLivres() {
@@ -675,6 +675,11 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
   }
   if (TEM(t, ['preço', 'valor', 'custa', 'orçamento'])) {
     await enviar(responderPreco(nomeAtual));
+    return enviar(retomar(s));
+  }
+  if (TEM(t, ['endereço', 'endereco', 'onde fica', 'localização', 'localizacao', 'como chego', 'onde e', 'onde é', 'qual o local'])) {
+    const local = conhecimento.horarios.find(h => h.local)?.local || 'Rua Dr. Carlos Chagas, 93, sala 07, Santo Amaro, Recife/PE (perto do Hospital Oswaldo Cruz e do Procape, em frente à farmácia Pague Menos)';
+    await enviar(`Estamos na ${local} 😊\nAtendimento às sextas, das 14h às 21h.`);
     return enviar(retomar(s));
   }
   if (TEM(t, PALAVRAS_GRATUIDADE)) {

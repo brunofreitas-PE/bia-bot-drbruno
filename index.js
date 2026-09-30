@@ -426,7 +426,7 @@ function responder(texto, nome) {
   }
   const direta = FAQ_DIRETAS.find(f => TEM(t, f.palavras));
   if (direta && conhecimento.faq[direta.indice]) return conhecimento.faq[direta.indice].resposta;
-  if (TEM(t, ['mais inform', 'informações', 'informacoes'])) return infoEspecialidade('outro', nome1);
+  if (TEM(t, ['mais inform', 'informações', 'informacoes', 'infor'])) return infoEspecialidade('outro', nome1);
   if (TEM(t, ['preço', 'valor', 'custa', 'orçamento'])) return responderPreco(nome1);
   if (TEM(t, ['agendar', 'marcar', 'consulta', 'horário', 'disponível'])) {
     return `Que alegria${comNome}! 😊 O Dr. Bruno atende às sextas, das 14h às 21h.${horariosLivres()}\n\nMe diz o melhor dia e horário que eu já reservo! 🗓️`;
@@ -665,7 +665,7 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
   const especNaMsg = identificarEspecialidade(texto);
 
   // "mais informações" funciona em QUALQUER etapa (desde que não cite outra especialidade)
-  if (especNaMsg === 'outro' && TEM(t, ['informações', 'informacoes', 'mais inform', 'quero saber mais', 'explica', 'como funciona', 'detalhe'])) {
+  if (especNaMsg === 'outro' && TEM(t, ['informações', 'informacoes', 'mais inform', 'infor', 'quero saber mais', 'explica', 'como funciona', 'detalhe'])) {
     await enviar(infoEspecialidade(s.espec || s.especPrevia || 'outro', nomeAtual));
     return enviar(retomar(s));
   }
@@ -677,9 +677,9 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
     await enviar(responderPreco(nomeAtual));
     return enviar(retomar(s));
   }
-  if (TEM(t, ['endereço', 'endereco', 'onde fica', 'localização', 'localizacao', 'como chego', 'onde e', 'onde é', 'qual o local'])) {
+  if (TEM(t, ['endereço', 'endereco', 'onde fica', 'localização', 'localizacao', 'como chego', 'onde e', 'onde é', 'qual o local', 'qual a cidade', 'que cidade', 'em que cidade', 'presencial', 'tenho que ir', 'preciso ir', 'vou ter que ir', 'fica longe', 'fica distante', 'moro longe', 'moro a', 'km do', 'km de'])) {
     const local = conhecimento.horarios.find(h => h.local)?.local || 'Rua Dr. Carlos Chagas, 93, sala 07, Santo Amaro, Recife/PE (perto do Hospital Oswaldo Cruz e do Procape, em frente à farmácia Pague Menos)';
-    await enviar(`Estamos na ${local} 😊\nAtendimento às sextas, das 14h às 21h.`);
+    await enviar(`Estamos na ${local} 😊\nAtendimento às sextas, das 14h às 21h.\nSe a distância for um complicador pra você, me avisa que eu verifico com a equipe a melhor forma de te ajudar 💙`);
     return enviar(retomar(s));
   }
   if (TEM(t, PALAVRAS_GRATUIDADE)) {
@@ -788,6 +788,11 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
     }
     case 'agenda': {
       if (!pareceHorarioValido(texto)) {
+        // Se a pessoa está recusando/hesitando (ex: "não", "ainda não", ao invés de simplesmente não
+        // ter mandado um horário válido), insistir em pedir data/hora só afasta — melhor dar um passo atrás.
+        if (TEM(t, ['nao', 'ainda nao', 'agora nao', 'depois', 'nao consigo', 'nao da', 'outro dia'])) {
+          return enviar(`Sem problema, ${s.nome}! 😊 Fico por aqui — é só me chamar quando quiser marcar sua avaliação. Qualquer dúvida, estou à disposição! 💙`);
+        }
         return enviar(`Não entendi direito, ${s.nome} 😅 Me diz um dia e horário (ex: "sexta às 15h" ou "25/09 às 14h") que eu já anoto pra você! 🗓️`);
       }
       const textoNormalizado = normalizar(texto).trim();

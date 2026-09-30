@@ -645,9 +645,12 @@ const DIAS_SEMANA = ['segunda', 'terca', 'terça', 'quarta', 'quinta', 'sexta', 
 const MESES = ['janeiro', 'fevereiro', 'marco', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 function pareceHorarioValido(texto) {
   const t = normalizar(texto);
-  const temNumero = /\d/.test(t);
-  const temPalavraDeData = DIAS_SEMANA.some(d => t.includes(normalizar(d))) || MESES.some(m => t.includes(normalizar(m))) || t.includes('amanha') || t.includes('hoje') || /\bh\b|\d+h\b|:\d{2}/.test(t);
-  return temNumero || temPalavraDeData;
+  // Exige DIA (dia da semana, mês, "amanhã"/"hoje" ou data dd/mm) E HORÁRIO (ex: "15h", "14:30") —
+  // as duas coisas juntas, senão aceita respostas ambíguas tipo "10h" quando há mais de um dia
+  // oferecido com o mesmo horário (ex: duas sextas diferentes, ambas com vaga às 10h).
+  const temPalavraDeData = DIAS_SEMANA.some(d => t.includes(normalizar(d))) || MESES.some(m => t.includes(normalizar(m))) || t.includes('amanha') || t.includes('hoje') || /\d{1,2}\/\d{1,2}/.test(t);
+  const temHorario = /\d{1,2}h\b|\d{1,2}:\d{2}/.test(t);
+  return temPalavraDeData && temHorario;
 }
 async function flowFunil(from, texto, enviar, nomePerfil) {
   const s = sessoes[from];

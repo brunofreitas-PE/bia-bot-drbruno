@@ -875,7 +875,14 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
       const recusa = /^(nao|n)\b/.test(t) || TEM(t, ['agora nao', 'depois', 'outro dia', 'por enquanto']);
       if (!recusa && TEM(t, ['sim', 'quero', 'pode', 'claro', 'bora', 'vamos'])) {
         s.step = 'orcamento';
-        s.perguntaAtual = `Perfeito, ${s.nome}! Só uma coisinha antes de eu reservar: o investimento que te passei encaixa no seu planejamento agora, ou prefere que eu te explique as condições de pagamento primeiro? 😊`;
+        // Corrige inconsistência do roteiro original: antes perguntava se "o investimento que
+        // te passei" encaixava, sem nunca ter informado nenhum valor antes nessa etapa.
+        // Agora informa a faixa de preço (mesma fonte da verdade de sempre) antes de perguntar.
+        const alvoPreco = FAIXAS_PRECO.find(f => f.chave === s.espec);
+        const infoPreco = alvoPreco
+          ? `O investimento de *${alvoPreco.rotulo}* costuma ficar na faixa de *${alvoPreco.faixa}* (o valor exato sai na avaliação, sem surpresas).`
+          : `O valor exato do seu caso sai na avaliação, sem surpresas.`;
+        s.perguntaAtual = `Perfeito, ${s.nome}! Só uma coisinha antes de eu reservar: ${infoPreco}\nIsso encaixa no seu planejamento agora, ou prefere que eu te explique as condições de pagamento primeiro? 😊`;
         return enviar(s.perguntaAtual);
       }
       if (recusa) {

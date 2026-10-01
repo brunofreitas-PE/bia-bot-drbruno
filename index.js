@@ -9,7 +9,9 @@ const app = express();
 app.use(express.json());
 
 // OPENAI_API_KEY: NOVA variável no .env para a transcrição
-const { WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WEBHOOK_VERIFY_TOKEN, SHEET_ID, KNOWLEDGE_SHEET_ID, GEMINI_API_KEY, DR_WHATSAPP_NUMBER, EQUIPE_VIDEO_WHATSAPP_NUMBER, ADMIN_PASSWORD, PORT = 3000 } = process.env;
+// ANTHROPIC_API_KEY: NOVA variável no .env para a camada de IA generativa (Claude Haiku 4.5) —
+// opcional: sem ela, o bot continua 100% no modo de regras, sem quebrar (ver chamarIA()).
+const { WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WEBHOOK_VERIFY_TOKEN, SHEET_ID, KNOWLEDGE_SHEET_ID, GEMINI_API_KEY, ANTHROPIC_API_KEY, DR_WHATSAPP_NUMBER, EQUIPE_VIDEO_WHATSAPP_NUMBER, ADMIN_PASSWORD, PORT = 3000 } = process.env;
 const GRAPH_API_URL = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
 // Credenciais do Google: aceita tanto o arquivo credentials.json local (dev)
@@ -307,6 +309,70 @@ const FAQ_DIRETAS = [
   { palavras: ['protocolo'], indice: 10 },
 ];
 
+// ===== CAMADA DE IA GENERATIVA (Claude Haiku 4.5) =====
+// Usada só pra INTERPRETAR/REDIGIR texto em dois pontos pontuais (fallback de FAQ livre e
+// quebra de objeção de preço) — ver "Prompt da Bia" (projeto) seção 13. Tudo que é
+// determinístico (preço, endereço, horário, agendamento, CRM, handoff) continua em código.
+// Sem ANTHROPIC_API_KEY configurada, chamarIA() retorna null e quem chamou usa o texto fixo
+// de reserva — o bot nunca fica sem resposta por causa disso.
+function montarSystemPromptIA() {
+  const precos = FAIXAS_PRECO.map(f => `- ${f.rotulo}: ${f.faixa}`).join('\n');
+  return `Você é a Bia, consultora de atendimento da clínica odontológica do Dr. Bruno Freitas (implantes, próteses sobre implantes, prótese protocolo, lentes de contato dental, alinhadores, harmonização facial).
+
+PRINCÍPIOS (Método BF): humanização, segurança, clareza, escuta, personalização, transparência financeira, fechamento sem pressão artificial. Não presuma objeção, renda, medo ou intenção. Não invente urgência, escassez ou dado fora do que está listado abaixo. Uma pergunta por vez.
+
+FONTE DA VERDADE (nunca informe valor/dado fora disso):
+- Endereço: Rua Dr. Carlos Chagas, 93, sala 07, Santo Amaro, Recife/PE
+- Atendimento: sextas-feiras, das 14h às 21h
+- Não atende convênio/plano de saúde
+- Pagamento: Pix, cartão, ou 40% de entrada + saldo em até 10x sem juros
+- Faixas de preço:
+${precos}
+
+AS 5 OBJEÇÕES MAIS COMUNS E COMO QUEBRAR (sempre reconhecer + contextualizar + terminar com pergunta curta, nunca afirmação fechada):
+1. Preço/dinheiro: reconhecer, lembrar formas de pagamento, perguntar se o obstáculo é valor total, entrada ou parcela.
+2. Tempo/urgência ("depois eu vejo"): reconhecer sem cobrar, perguntar o que ajudaria a decidir com mais segurança, sem pressionar prazo.
+3. Confiança/autoridade ("como sei que funciona"): explicar o que acontece na avaliação, reforçar que a decisão final é do paciente, sem prometer resultado clínico.
+4. Necessidade não percebida: retomar o impacto que o próprio paciente relatou na conversa e perguntar o que mudaria se resolvesse agora.
+5. Comparação/terceiros (outro profissional, "vou perguntar pro meu marido/esposa"): respeitar, oferecer resumo objetivo pra compartilhar, perguntar se falta alguma informação.
+
+ESCOPO: você NÃO responde diagnóstico clínico, reclamação/reembolso, nem decide sozinha conceder desconto fora do padrão — nesses casos diga que vai chamar a equipe e pare por aí (o sistema já cuida do aviso interno).
+
+ESTILO: português brasileiro, natural, cordial, direto, humano, compatível com WhatsApp. Textos curtos. Emojis com moderação (😊 🦷 💙 ⏰). Nunca se identifique como robô/IA.
+
+Responda APENAS com a mensagem que a Bia enviaria — sem comentários, sem aspas, sem explicação extra.`;
+}
+
+async function chamarIA(mensagens) {
+  if (!ANTHROPIC_API_KEY) return null; // integração desligada até configurar a chave — comportamento normal
+  const MAX_TENTATIVAS = 3;
+  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa++) {
+    try {
+      const res = await axios.post(
+        'https://api.anthropic.com/v1/messages',
+        { model: 'claude-haiku-4-5', max_tokens: 400, system: montarSystemPromptIA(), messages: mensagens },
+        { headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+      );
+      const texto = (res.data?.content || []).map(b => b.text || '').join('').trim();
+      return texto || null;
+    } catch (err) {
+      const status = err.response?.status;
+      const transitorio = status === 503 || status === 429 || status === 529;
+      if (transitorio && tentativa < MAX_TENTATIVAS) { await esperar(tentativa * 1500); continue; }
+      console.error('Falha ao chamar IA generativa (Claude):', err.response?.data || err.message);
+      return null;
+    }
+  }
+}
+
+// Quebra de objeção de preço com IA, caindo no texto fixo de sempre se a API falhar/não estiver configurada
+async function quebrarObjecaoPreco(nome, tratamento, textoPaciente) {
+  const resposta = await chamarIA([
+    { role: 'user', content: `O paciente ${nome} disse, sobre o investimento do tratamento de ${tratamento}: "${textoPaciente}". Aplique a objeção nº1 (preço/dinheiro) do seu guia: reconheça, contextualize as formas de pagamento e termine com uma pergunta curta convidando a seguir com a avaliação mesmo assim.` }
+  ]);
+  return resposta || `Sem problema, ${nome}! 😊 A gente trabalha com Pix, cartão ou 40% de entrada + saldo em até 10x sem juros — isso costuma ajudar bastante.\nMesmo assim, vamos seguir com a avaliação? Lá o Dr. Bruno também pode montar um plano que caiba melhor no seu momento.`;
+}
+
 // ===== NOVO 3) TRANSCRIÇÃO DE ÁUDIO (Whisper) =====
 async function baixarMedia(mediaId) {
   // Passo 1: pedir a URL do arquivo ao WhatsApp (a URL dura poucos minutos)
@@ -443,7 +509,7 @@ function responderPreco(nome1, texto = '') {
   return `Claro${nome1 ? ', ' + nome1 : ''}! 😊\n\nNossos valores costumam ficar nestas faixas:\n\n${lista}\n\nO valor exato depende do seu caso — sai na avaliação com o Dr. Bruno, sem surpresas.\nPix, cartão ou 40% de entrada + saldo em até 10x sem juros 💳`;
 }
 
-function responder(texto, nome) {
+async function responder(texto, nome) {
   const t = normalizar(texto);
   const nome1 = primeiroNome(nome);
   const comNome = nome1 ? ', ' + nome1 : '';
@@ -472,6 +538,10 @@ function responder(texto, nome) {
   if (t.length <= 30 && TEM(t, ['ola', 'oi', 'bom dia', 'boa tarde', 'boa noite'])) {
     return `Olá${comNome}! 😊 Eu sou a Bia, consultora da clínica do Dr. Bruno Freitas.\nPosso te ajudar com:\n\n🦷 Agendar uma avaliação\n💰 Valores dos tratamentos\n⚡ Urgências\n❓ Dúvidas sobre implantes\n\nO que você procura hoje?`;
   }
+  // Fallback: nada bateu por palavra-chave/FAQ — tenta a IA generativa pra interpretar a
+  // mensagem livre; se a API não estiver configurada ou falhar, usa a resposta fixa de sempre.
+  const respostaIA = await chamarIA([{ role: 'user', content: texto }]);
+  if (respostaIA) return respostaIA;
   return `Eu sou a Bia, consultora da clínica do Dr. Bruno Freitas 😊\nPosso te ajudar com:\n\n🦷 Agendar avaliação\n💰 Valores\n⚡ Urgências\n❓ Dúvidas sobre implantes\n\nO que você procura hoje?`;
 }
 
@@ -824,7 +894,9 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
       s.orcamentoOk = !naoEncaixa;
       s.step = 'agenda';
       if (naoEncaixa) {
-        await enviar(`Sem problema, ${s.nome}! 😊 A gente trabalha com Pix, cartão ou 40% de entrada + saldo em até 10x sem juros — isso costuma ajudar bastante.\nMesmo assim, vamos seguir com a avaliação? Lá o Dr. Bruno também pode montar um plano que caiba melhor no seu momento.`);
+        // Objeção de preço (nº1 do guia) — tenta a IA generativa pra uma quebra mais
+        // personalizada; se não estiver configurada/falhar, cai no texto fixo de sempre.
+        await enviar(await quebrarObjecaoPreco(s.nome, espec.rotulo, texto));
         return enviar(retomar(s));
       }
       return enviar(`Ótimo, ${s.nome}! 🎉${horariosLivres()}`);
@@ -991,7 +1063,7 @@ async function processarTexto(from, texto, nome) {
           await enviar(mensagemHandoff(motivoHandoff, primeiroNome(nome)));
           notificarHandoff({ nome, numero: from, motivo: motivoHandoff, texto }).catch(() => {});
         } else {
-          await enviar(responder(texto, nome));
+          await enviar(await responder(texto, nome));
         }
       } else {
         await enviar(iniciarFunil(from, texto, nome));

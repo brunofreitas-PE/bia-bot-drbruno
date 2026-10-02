@@ -323,7 +323,7 @@ PRINCÍPIOS (Método BF): humanização, segurança, clareza, escuta, personaliz
 
 FONTE DA VERDADE (nunca informe valor/dado fora disso):
 - Endereço: Rua Dr. Carlos Chagas, 93, sala 07, Santo Amaro, Recife/PE
-- Atendimento: sextas-feiras, das 14h às 21h
+- Atendimento: ${infoAtendimentoDinamica()}
 - Não atende convênio/plano de saúde
 - Pagamento: Pix, cartão, ou 40% de entrada + saldo em até 10x sem juros
 - Faixas de preço:
@@ -444,42 +444,42 @@ const ESPECIALIDADES = {
     q3: 'Perfeito, {nome}! Me conta: como está sua mastigação hoje? Tem algum dente que você sente falta?',
     q4: 'E o que mais te incomoda ao comer ou sorrir por causa desse dente? 💭',
     implicacao: 'Entendo, {nome}... e vale saber: quando um dente se perde, os vizinhos tendem a se mover e a mastigação piora com o tempo. Cuidar agora evita que o problema cresça — e deixa o tratamento mais simples. 💙',
-    necessidade: 'A boa notícia: o Dr. Bruno é especialista em implantes com planejamento digital, e o procedimento é praticamente sem dor. Imagine voltar a mastigar e sorrir com um dente fixo e natural que ninguém percebe...\nO próximo passo é a avaliação com ele — é lá que sai seu plano personalizado, sem surpresas.\nOs horários de sexta (14h às 21h) costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
+    necessidade: 'A boa notícia: o Dr. Bruno é especialista em implantes com planejamento digital, e o procedimento é praticamente sem dor. Imagine voltar a mastigar e sorrir com um dente fixo e natural que ninguém percebe...\nO próximo passo é a avaliação com ele — é lá que sai seu plano personalizado, sem surpresas.\nOs horários de {diahorario} costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
   },
   protese: {
     rotulo: 'Prótese/Protocolo',
     q3: 'Entendi, {nome}! Você usa alguma prótese hoje? Como está o encaixe e o conforto?',
     q4: 'E o que mais te incomoda nela — mobilidade, estética, desconforto pra comer?',
     implicacao: 'Faz todo sentido, {nome}... uma prótese mal encaixada pode machucar a gengiva e fazer a gente evitar situações sociais. Você já deixou de sorrir ou comer fora de casa por causa dela? 💙',
-    necessidade: 'O Dr. Bruno trabalha com prótese fixa sobre implante (protocolo): estável, confortável e com cara de dente natural. Imagine comer e sorrir sem pensar nisso...\nO próximo passo é a avaliação — é lá que ele desenha seu plano, sem surpresas.\nOs horários de sexta (14h às 21h) costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
+    necessidade: 'O Dr. Bruno trabalha com prótese fixa sobre implante (protocolo): estável, confortável e com cara de dente natural. Imagine comer e sorrir sem pensar nisso...\nO próximo passo é a avaliação — é lá que ele desenha seu plano, sem surpresas.\nOs horários de {diahorario} costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
   },
   lentes: {
     rotulo: 'Lentes 3D em resina',
     q3: 'Adoro esse objetivo, {nome}! Me conta: o que você gostaria de melhorar no seu sorriso?',
     q4: 'E o que mais te incomoda hoje — a cor, o formato ou o alinhamento dos dentes?',
     implicacao: 'Totalmente compreensível, {nome}... um sorriso que incomoda mexe com a autoestima: nas fotos, no trabalho, nas relações. Quanto tempo mais você quer conviver com isso? 💙',
-    necessidade: 'As Lentes 3D em resina do Dr. Bruno são planejadas digitalmente: você visualiza o resultado ANTES de começar, com acabamento natural.\nO próximo passo é a avaliação — é lá que ele desenha o seu sorriso, sem surpresas.\nOs horários de sexta (14h às 21h) costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
+    necessidade: 'As Lentes 3D em resina do Dr. Bruno são planejadas digitalmente: você visualiza o resultado ANTES de começar, com acabamento natural.\nO próximo passo é a avaliação — é lá que ele desenha o seu sorriso, sem surpresas.\nOs horários de {diahorario} costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
   },
   alinhadores: {
     rotulo: 'Alinhadores',
     q3: 'Ótimo, {nome}! Seus dentes hoje estão tortos ou desalinhados? Você já usou aparelho alguma vez?',
     q4: 'E o que mais te incomoda — o alinhamento, a mastigação, ou esconder o sorriso nas fotos?',
     implicacao: 'Entendo, {nome}... dentes desalinhados não são só questão de estética: ficam mais difíceis de limpar, o desgaste é maior e o problema tende a aumentar com o tempo. Quanto tempo mais você quer conviver com isso? 💙',
-    necessidade: 'Os alinhadores transparentes são discretos e removíveis — ninguém percebe que você está em tratamento. Com planejamento digital, você já vê o resultado final antes de começar.\nO próximo passo é a avaliação com o Dr. Bruno — é lá que sai seu plano, sem surpresas.\nOs horários de sexta (14h às 21h) costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
+    necessidade: 'Os alinhadores transparentes são discretos e removíveis — ninguém percebe que você está em tratamento. Com planejamento digital, você já vê o resultado final antes de começar.\nO próximo passo é a avaliação com o Dr. Bruno — é lá que sai seu plano, sem surpresas.\nOs horários de {diahorario} costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
   },
   harmonizacao: {
     rotulo: 'Harmonização Facial',
     q3: 'Perfeito, {nome}! Qual área da Harmonização você gostaria de cudar em primeiro lugar — Botox, Preenchedores (Contorno, olheiras, bigode chinês, lábios), Bio estimulador ou Fios de PDO?',
     q4: 'E o que mais te incomoda quando você se olha no espelho? 💭',
     implicacao: 'Essa insatisfação acompanha a gente, {nome}... em cada foto, cada reunião, cada momento de se olhar. Como isso tem pesado na sua autoestima ao longo do tempo? 💙',
-    necessidade: 'O Dr. Bruno trabalha a harmonização de forma natural e segura, respeitando a beleza do seu rosto — nada de exageros, só equilíbrio.\nO próximo passo é a avaliação — é lá que ele entende exatamente o que você busca.\nOs horários de sexta (14h às 21h) costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
+    necessidade: 'O Dr. Bruno trabalha a harmonização de forma natural e segura, respeitando a beleza do seu rosto — nada de exageros, só equilíbrio.\nO próximo passo é a avaliação — é lá que ele entende exatamente o que você busca.\nOs horários de {diahorario} costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
   },
   outro: {
     rotulo: 'Outro assunto',
     q3: 'Fico feliz que tenha chegado até aqui! Me conta um pouquinho: o que te trouxe até a gente hoje?',
     q4: 'E isso hoje, o quanto tem te incomodado no dia a dia?',
     implicacao: 'Entendo bem, {nome}... continuar como está tem um custo: o problema tende a piorar com o tempo, e agir agora deixa tudo mais simples. 💙',
-    necessidade: 'Na avaliação, o Dr. Bruno vai mapear exatamente o seu caso — com tecnologia de ponta e atendimento sem dor.\nOs horários de sexta (14h às 21h) costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
+    necessidade: 'Na avaliação, o Dr. Bruno vai mapear exatamente o seu caso — com tecnologia de ponta e atendimento sem dor.\nOs horários de {diahorario} costumam preencher rápido ⏰\nQuer que eu já reserve o seu? (responde *sim* ou *não* 😊)'
   }
 };
 const RESUMOS = {
@@ -518,14 +518,14 @@ async function responder(texto, nome) {
   }
   if (TEM(t, ['endereço', 'onde fica', 'localização', 'como chego'])) {
     const local = conhecimento.horarios.find(h => h.local)?.local || 'Rua Dr. Carlos Chagas, 93, sala 07, Santo Amaro, Recife/PE (perto do Hospital Oswaldo Cruz e do Procape, em frente à farmácia Pague Menos)';
-    return `Estamos na ${local} 😊\nAtendimento às sextas, das 14h às 21h. Quer que eu verifique um horário pra você?`;
+    return `Estamos na ${local} 😊\nAtendimento às ${infoAtendimentoDinamica()}. Quer que eu verifique um horário pra você?`;
   }
   const direta = FAQ_DIRETAS.find(f => TEM(t, f.palavras));
   if (direta && conhecimento.faq[direta.indice]) return conhecimento.faq[direta.indice].resposta;
   if (TEM(t, ['mais inform', 'informações', 'informacoes', 'infor'])) return infoEspecialidade('outro', nome1);
   if (TEM(t, ['preço', 'valor', 'custa', 'orçamento', 'pagamento', 'pagar', 'parcela', 'parcelar', 'quanto e', 'quanto é', 'quanto fica', 'quanto sai'])) return responderPreco(nome1);
   if (TEM(t, ['agendar', 'marcar', 'consulta', 'horário', 'disponível'])) {
-    return `Que alegria${comNome}! 😊 O Dr. Bruno atende às sextas, das 14h às 21h.${horariosLivres()}\n\nMe diz o melhor dia e horário que eu já reservo! 🗓️`;
+    return `Que alegria${comNome}! 😊 O Dr. Bruno atende às ${infoAtendimentoDinamica()}.${horariosLivres()}\n\nMe diz o melhor dia e horário que eu já reservo! 🗓️`;
   }
   const tokens = t.split(/\s+/).filter(w => w.length > 3);
   let melhor = null, score = 0;
@@ -675,6 +675,27 @@ function identificarEspecialidade(texto) {
   if (t.includes('5') || t.includes('harmoniz') || t.includes('hof') || t.includes('rosto') || t.includes('labios') || t.includes('botox') || t.includes('preenchimento')) return 'harmonizacao';
   return 'outro';
 }
+// ===== DIA/HORÁRIO DE ATENDIMENTO (dinâmico, vem da planilha "horarios_disponiveis_api") =====
+// Antes esse texto ("atende às sextas, 14h às 21h") era fixo no código, então quando o Dr.
+// Bruno mudava o dia na planilha (ex: sábados em outubro), a Bia continuava dizendo "sexta" —
+// causando contradição com a lista de horários livres (essa sim sempre vinda da planilha).
+// Agora os dois vêm da mesma fonte: a próxima data válida cadastrada na planilha.
+const PLURAL_DIA_SEMANA = {
+  segunda: 'segundas-feiras', 'segunda-feira': 'segundas-feiras',
+  terca: 'terças-feiras', 'terca-feira': 'terças-feiras',
+  quarta: 'quartas-feiras', 'quarta-feira': 'quartas-feiras',
+  quinta: 'quintas-feiras', 'quinta-feira': 'quintas-feiras',
+  sexta: 'sextas-feiras', 'sexta-feira': 'sextas-feiras',
+  sabado: 'sábados', domingo: 'domingos',
+};
+function infoAtendimentoDinamica() {
+  const proximo = conhecimento.horarios.find(h => h.horarios && !passouData(h.data));
+  if (proximo && proximo.dia && proximo.horarios) {
+    const plural = PLURAL_DIA_SEMANA[normalizar(proximo.dia).trim()] || proximo.dia;
+    return `${plural}, ${proximo.horarios}`;
+  }
+  return 'sextas-feiras, das 14h às 21h'; // reserva só se a planilha estiver vazia/sem datas futuras
+}
 function horariosLivres() {
   const livres = conhecimento.horarios.filter(h => h.horarios && !passouData(h.data)).slice(0, 2);
   return livres.length ? '\n\nHorários que já estão livres:\n' + livres.map(h => `📅 ${h.dia} (${h.data}): ${h.horarios}`).join('\n') : '\n\nMe diz o dia e horário que ficam melhores pra você, que eu já anoto! 🗓️';
@@ -786,7 +807,7 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
   }
   if (TEM(t, ['endereço', 'endereco', 'onde fica', 'localização', 'localizacao', 'como chego', 'onde e', 'onde é', 'qual o local', 'cidade e isso', 'cidade é isso', 'qual cidade', 'qual a cidade', 'que cidade', 'em que cidade', 'presencial', 'tenho que ir', 'preciso ir', 'vou ter que ir', 'fica longe', 'fica distante', 'moro longe', 'moro a', 'km do', 'km de', 'sou daqui de', 'sou de'])) {
     const local = conhecimento.horarios.find(h => h.local)?.local || 'Rua Dr. Carlos Chagas, 93, sala 07, Santo Amaro, Recife/PE (perto do Hospital Oswaldo Cruz e do Procape, em frente à farmácia Pague Menos)';
-    await enviar(`Estamos na ${local} 😊\nAtendimento às sextas, das 14h às 21h.\nSe a distância for um complicador pra você, me avisa que eu verifico com a equipe a melhor forma de te ajudar 💙`);
+    await enviar(`Estamos na ${local} 😊\nAtendimento às ${infoAtendimentoDinamica()}.\nSe a distância for um complicador pra você, me avisa que eu verifico com a equipe a melhor forma de te ajudar 💙`);
     return enviar(retomar(s));
   }
   if (TEM(t, PALAVRAS_GRATUIDADE)) {
@@ -869,7 +890,7 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
       s.respostas.urgenciaPercebida = texto;
       s.temperaturaLead = classificarUrgenciaPercebida(t);
       s.step = 'fechamento';
-      return enviar(espec.necessidade.replace('{nome}', s.nome));
+      return enviar(espec.necessidade.replace('{nome}', s.nome).replace('{diahorario}', infoAtendimentoDinamica()));
     }
     case 'fechamento': {
       const recusa = /^(nao|n)\b/.test(t) || TEM(t, ['agora nao', 'depois', 'outro dia', 'por enquanto']);
@@ -919,7 +940,7 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
       }
       const textoNormalizado = normalizar(texto).trim();
       const conflito = reservasHorario.find(r => r.textoNormalizado === textoNormalizado);
-      await enviar(`📅 Anotado, ${s.nome}! Registrei: *${texto}*.\nA equipe vai confirmar seu horário com você por aqui. Qualquer dúvida, estou por aqui! 😊💙`);
+      await enviar(`📅 Anotado, ${s.nome}! Registrei: *${texto}*.\nO Dr. Bruno vai entrar em contato pra confirmar seu agendamento. Qualquer dúvida, estou por aqui! 😊💙`);
       registrarConversa(s.nome, from, `[BIA-QUALIFICADO] [${classificarLead(s)}] ${espec.rotulo} | horario: ${texto} | situacao: ${s.respostas.situacao || '-'} | problema: ${s.respostas.problema || '-'}${conflito ? ' | ⚠️ POSSÍVEL CONFLITO DE HORÁRIO' : ''}`).catch(() => {});
       reservasHorario.push({ texto, textoNormalizado, nome: s.nome, numero: from, ts: Date.now() });
       notificarAgendamento({ nome: s.nome, numero: from, tratamento: espec.rotulo, horario: texto, conflito: !!conflito }).catch(() => {});

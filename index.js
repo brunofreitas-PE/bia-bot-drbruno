@@ -518,14 +518,14 @@ async function responder(texto, nome) {
   }
   if (TEM(t, ['endereço', 'onde fica', 'localização', 'como chego'])) {
     const local = conhecimento.horarios.find(h => h.local)?.local || 'Rua Dr. Carlos Chagas, 93, sala 07, Santo Amaro, Recife/PE (perto do Hospital Oswaldo Cruz e do Procape, em frente à farmácia Pague Menos)';
-    return `Estamos na ${local} 😊\nAtendimento às ${infoAtendimentoDinamica()}. Quer que eu verifique um horário pra você?`;
+    return `Estamos na ${local} 😊\nAtendimento ${infoAtendimentoComPreposicao()}. Quer que eu verifique um horário pra você?`;
   }
   const direta = FAQ_DIRETAS.find(f => TEM(t, f.palavras));
   if (direta && conhecimento.faq[direta.indice]) return conhecimento.faq[direta.indice].resposta;
   if (TEM(t, ['mais inform', 'informações', 'informacoes', 'infor'])) return infoEspecialidade('outro', nome1);
   if (TEM(t, ['preço', 'valor', 'custa', 'orçamento', 'pagamento', 'pagar', 'parcela', 'parcelar', 'quanto e', 'quanto é', 'quanto fica', 'quanto sai'])) return responderPreco(nome1);
   if (TEM(t, ['agendar', 'marcar', 'consulta', 'horário', 'disponível'])) {
-    return `Que alegria${comNome}! 😊 O Dr. Bruno atende às ${infoAtendimentoDinamica()}.${horariosLivres()}\n\nMe diz o melhor dia e horário que eu já reservo! 🗓️`;
+    return `Que alegria${comNome}! 😊 O Dr. Bruno atende ${infoAtendimentoComPreposicao()}.${horariosLivres()}\n\nMe diz o melhor dia e horário que eu já reservo! 🗓️`;
   }
   const tokens = t.split(/\s+/).filter(w => w.length > 3);
   let melhor = null, score = 0;
@@ -680,21 +680,40 @@ function identificarEspecialidade(texto) {
 // Bruno mudava o dia na planilha (ex: sábados em outubro), a Bia continuava dizendo "sexta" —
 // causando contradição com a lista de horários livres (essa sim sempre vinda da planilha).
 // Agora os dois vêm da mesma fonte: a próxima data válida cadastrada na planilha.
-const PLURAL_DIA_SEMANA = {
-  segunda: 'segundas-feiras', 'segunda-feira': 'segundas-feiras',
-  terca: 'terças-feiras', 'terca-feira': 'terças-feiras',
-  quarta: 'quartas-feiras', 'quarta-feira': 'quartas-feiras',
-  quinta: 'quintas-feiras', 'quinta-feira': 'quintas-feiras',
-  sexta: 'sextas-feiras', 'sexta-feira': 'sextas-feiras',
-  sabado: 'sábados', domingo: 'domingos',
+// "sábados"/"domingos" são masculinos (preposição "aos"), os demais dias são femininos
+// ("às") — por isso guardamos o plural E a preposição certa de cada um. Antes a preposição
+// "às" vinha fixa no texto de quem chamava esta função, então quando a planilha tinha
+// "sábado" o resultado virava "atende às sábados" (errado); agora a função devolve a
+// preposição junto com o dia, então quem chama só insere o resultado, sem prefixar nada.
+const DIA_SEMANA_INFO = {
+  segunda: { plural: 'segundas-feiras', prep: 'às' }, 'segunda-feira': { plural: 'segundas-feiras', prep: 'às' },
+  terca: { plural: 'terças-feiras', prep: 'às' }, 'terca-feira': { plural: 'terças-feiras', prep: 'às' },
+  quarta: { plural: 'quartas-feiras', prep: 'às' }, 'quarta-feira': { plural: 'quartas-feiras', prep: 'às' },
+  quinta: { plural: 'quintas-feiras', prep: 'às' }, 'quinta-feira': { plural: 'quintas-feiras', prep: 'às' },
+  sexta: { plural: 'sextas-feiras', prep: 'às' }, 'sexta-feira': { plural: 'sextas-feiras', prep: 'às' },
+  sabado: { plural: 'sábados', prep: 'aos' }, domingo: { plural: 'domingos', prep: 'aos' },
 };
+// Retorna só "sextas-feiras, 14h às 21h" (sem preposição) — usado em contextos como
+// "Atendimento: X" que não precisam de preposição.
 function infoAtendimentoDinamica() {
   const proximo = conhecimento.horarios.find(h => h.horarios && !passouData(h.data));
   if (proximo && proximo.dia && proximo.horarios) {
-    const plural = PLURAL_DIA_SEMANA[normalizar(proximo.dia).trim()] || proximo.dia;
+    const info = DIA_SEMANA_INFO[normalizar(proximo.dia).trim()];
+    const plural = info ? info.plural : proximo.dia;
     return `${plural}, ${proximo.horarios}`;
   }
   return 'sextas-feiras, das 14h às 21h'; // reserva só se a planilha estiver vazia/sem datas futuras
+}
+// Retorna "às sextas-feiras, 14h às 21h" ou "aos sábados, 9h às 13h" — já com a preposição
+// certa, pra usar em frases como "O Dr. Bruno atende ${infoAtendimentoComPreposicao()}."
+function infoAtendimentoComPreposicao() {
+  const proximo = conhecimento.horarios.find(h => h.horarios && !passouData(h.data));
+  if (proximo && proximo.dia && proximo.horarios) {
+    const info = DIA_SEMANA_INFO[normalizar(proximo.dia).trim()];
+    if (info) return `${info.prep} ${info.plural}, ${proximo.horarios}`;
+    return `às ${proximo.dia}, ${proximo.horarios}`;
+  }
+  return 'às sextas-feiras, das 14h às 21h'; // reserva só se a planilha estiver vazia/sem datas futuras
 }
 function horariosLivres() {
   const livres = conhecimento.horarios.filter(h => h.horarios && !passouData(h.data)).slice(0, 2);
@@ -805,16 +824,23 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
     await enviar(responderPreco(nomeAtual));
     return enviar(retomar(s));
   }
-  if (TEM(t, ['endereço', 'endereco', 'onde fica', 'localização', 'localizacao', 'como chego', 'onde e', 'onde é', 'qual o local', 'cidade e isso', 'cidade é isso', 'qual cidade', 'qual a cidade', 'que cidade', 'em que cidade', 'presencial', 'tenho que ir', 'preciso ir', 'vou ter que ir', 'fica longe', 'fica distante', 'moro longe', 'moro a', 'km do', 'km de', 'sou daqui de', 'sou de'])) {
+  // "moro a" (sem dígito depois) também batia em "moro aqui", "moro ali", "moro atrás" — por
+  // isso usamos regex com dígito pra só pegar "moro a 215km", "moro a 30min" etc.
+  if (TEM(t, ['endereço', 'endereco', 'onde fica', 'localização', 'localizacao', 'como chego', 'onde e', 'onde é', 'qual o local', 'cidade e isso', 'cidade é isso', 'qual cidade', 'qual a cidade', 'que cidade', 'em que cidade', 'presencial', 'tenho que ir', 'preciso ir', 'vou ter que ir', 'fica longe', 'fica distante', 'moro longe', 'km do', 'km de', 'sou daqui de', 'sou de']) || /moro a\s*\d/.test(t)) {
     const local = conhecimento.horarios.find(h => h.local)?.local || 'Rua Dr. Carlos Chagas, 93, sala 07, Santo Amaro, Recife/PE (perto do Hospital Oswaldo Cruz e do Procape, em frente à farmácia Pague Menos)';
-    await enviar(`Estamos na ${local} 😊\nAtendimento às ${infoAtendimentoDinamica()}.\nSe a distância for um complicador pra você, me avisa que eu verifico com a equipe a melhor forma de te ajudar 💙`);
+    await enviar(`Estamos na ${local} 😊\nAtendimento ${infoAtendimentoComPreposicao()}.\nSe a distância for um complicador pra você, me avisa que eu verifico com a equipe a melhor forma de te ajudar 💙`);
     return enviar(retomar(s));
   }
   if (TEM(t, PALAVRAS_GRATUIDADE)) {
     await enviar(responderGratuidade(nomeAtual));
     return enviar(retomar(s));
   }
-  if (TEM(t, PALAVRAS_URGENCIA)) {
+  // Só dispara na PRIMEIRA vez que a urgência aparece (s.urgencia ainda não estava marcada).
+  // Antes isso disparava em TODA mensagem com uma palavra-gatilho (ex: "quebrou"), então um
+  // paciente que descrevia a mesma dor em mais de um áudio ficava num loop: a Bia reiniciava
+  // "me conta o que você sente" de novo a cada mensagem, sem nunca avançar pro switch(s.step)
+  // (que já trata a etapa 'urgencia' registrando a situação e pedindo o horário).
+  if (TEM(t, PALAVRAS_URGENCIA) && !s.urgencia) {
     s.urgencia = true; // guarda o contexto da dor na sessão
     await enviar(`Poxa, sinto muito que esteja passando por isso, ${nomeAtual} 😟\nO Dr. Bruno reserva horários para urgências e vai te priorizar.`);
     if (!s.nome) return enviar('Me diz seu nome rapidinho que eu já anoto seu caso como prioridade 🙏');

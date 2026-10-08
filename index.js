@@ -323,7 +323,7 @@ const FAQ_DIRETAS = [
 // de reserva — o bot nunca fica sem resposta por causa disso.
 function montarSystemPromptIA() {
   const precos = FAIXAS_PRECO.map(f => `- ${f.rotulo}: ${f.faixa}`).join('\n');
-  return `Você é a Bia, consultora de atendimento da clínica odontológica do Dr. Bruno Freitas (implantes, próteses sobre implantes, prótese protocolo, lentes de contato dental, alinhadores, harmonização facial).
+  return `Você é a Bia, assistente virtual de atendimento da clínica odontológica do Dr. Bruno Freitas (implantes, próteses sobre implantes, prótese protocolo, lentes de contato dental, alinhadores, harmonização facial).
 
 PRINCÍPIOS (Método BF): humanização, segurança, clareza, escuta, personalização, transparência financeira, fechamento sem pressão artificial. Não presuma objeção, renda, medo ou intenção. Não invente urgência, escassez ou dado fora do que está listado abaixo. Uma pergunta por vez.
 
@@ -542,13 +542,13 @@ async function responder(texto, nome) {
   }
   if (score >= 2 && melhor) return melhor.resposta;
   if (t.length <= 30 && TEM(t, ['ola', 'oi', 'bom dia', 'boa tarde', 'boa noite'])) {
-    return `Olá${comNome}! 😊 Eu sou a Bia, consultora da clínica do Dr. Bruno Freitas.\nPosso te ajudar com:\n\n🦷 Agendar uma avaliação\n💰 Valores dos tratamentos\n⚡ Urgências\n❓ Dúvidas sobre implantes\n\nO que você procura hoje?`;
+    return `Olá${comNome}! 😊 Eu sou a Bia, assistente virtual da clínica do Dr. Bruno Freitas.\nPosso te ajudar com:\n\n🦷 Agendar uma avaliação\n💰 Valores dos tratamentos\n⚡ Urgências\n❓ Dúvidas sobre implantes\n\nO que você procura hoje?`;
   }
   // Fallback: nada bateu por palavra-chave/FAQ — tenta a IA generativa pra interpretar a
   // mensagem livre; se a API não estiver configurada ou falhar, usa a resposta fixa de sempre.
   const respostaIA = await chamarIA([{ role: 'user', content: texto }]);
   if (respostaIA) return respostaIA;
-  return `Eu sou a Bia, consultora da clínica do Dr. Bruno Freitas 😊\nPosso te ajudar com:\n\n🦷 Agendar avaliação\n💰 Valores\n⚡ Urgências\n❓ Dúvidas sobre implantes\n\nO que você procura hoje?`;
+  return `Eu sou a Bia, assistente virtual da clínica do Dr. Bruno Freitas 😊\nPosso te ajudar com:\n\n🦷 Agendar avaliação\n💰 Valores\n⚡ Urgências\n❓ Dúvidas sobre implantes\n\nO que você procura hoje?`;
 }
 
 // ===== MEMÓRIA DE CONVERSA (Método BF, seção 7) =====
@@ -663,11 +663,12 @@ function iniciarFunil(numero, textoInicial, nomePerfil) {
     // pergunta se repete, descartando o que a pessoa realmente disse.
     if (nomeInicial) {
       sessoes[numero].step = 'urgencia';
-      return `Olá, ${nomeInicial}! Que alegria receber seu contato 😊! Eu sou a *Bia*, consultora da clínica do Dr. Bruno Freitas.\nSinto muito que esteja com dor 😟 — vamos resolver isso com prioridade!\nMe conta rapidinho o que está sentindo (desde quando dói, o que piora)? 🙏`;
+      return `Olá, ${nomeInicial}! Que alegria receber seu contato 😊! Eu sou a *Bia*, assistente virtual da clínica do Dr. Bruno Freitas.\nSinto muito que esteja com dor 😟 — vamos resolver isso com prioridade!\nMe conta rapidinho o que está sentindo (desde quando dói, o que piora)? 🙏`;
     }
-    return 'Olá! Que alegria receber seu contato 😊! Eu sou a *Bia*, consultora da clínica do Dr. Bruno Freitas.\nSinto muito que esteja com dor 😟 — vamos resolver isso com prioridade!\nMe diz seu nome, por favor? 😊';
+    return 'Olá! Que alegria receber seu contato 😊! Eu sou a *Bia*, assistente virtual da clínica do Dr. Bruno Freitas.\nSinto muito que esteja com dor 😟 — vamos resolver isso com prioridade!\nMe diz seu nome, por favor? 😊';
   }
-  return 'Olá! Que alegria receber seu contato 😊! Eu sou a *Bia*, consultora da clínica do Dr. Bruno Freitas.\nQual seu nome? E me conta: você gostaria de transformar o seu sorriso ou cuidar do seu rosto?';
+  // Aviso de transparência (LGPD): deixa claro que é assistente virtual e como os dados são usados.
+  return 'Olá! Que alegria receber seu contato 😊! Eu sou a *Bia*, assistente virtual da clínica do Dr. Bruno Freitas. Uso o que você me contar só para organizar seu atendimento, e a equipe pode acompanhar a conversa.\nQual seu nome? E me conta: você gostaria de transformar o seu sorriso ou cuidar do seu rosto?';
 }
 function menuEspecialidade(nome) {
   return `Muito prazer, ${nome}! 😊\n\nPra eu te orientar da melhor forma, me diz qual é o seu caso:\n\n1️⃣ Implante (dente fixo)\n2️⃣ Prótese / Protocolo\n3️⃣ Lentes 3D em resina\n4️⃣ Alinhadores\n5️⃣ Harmonização Facial\n\nÉ só responder o número ou escrever 😉`;

@@ -1,17 +1,23 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const axios = require('axios');
 const FormData = require('form-data'); // NOVO: necessário para o upload do áudio
 const { google } = require('googleapis');
 const app = express();
-app.use(express.json());
+app.set('trust proxy', 1); // Railway fica atrás de 1 proxy: necessário pra req.ip e req.secure corretos
+// Guarda o corpo BRUTO da requisição em req.rawBody: a assinatura do webhook (HMAC) é calculada
+// sobre os bytes exatos que a Meta enviou, e o JSON já parseado não serve pra isso.
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // OPENAI_API_KEY: NOVA variável no .env para a transcrição
 // ANTHROPIC_API_KEY: NOVA variável no .env para a camada de IA generativa (Claude Haiku 4.5) —
 // opcional: sem ela, o bot continua 100% no modo de regras, sem quebrar (ver chamarIA()).
-const { WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WEBHOOK_VERIFY_TOKEN, SHEET_ID, KNOWLEDGE_SHEET_ID, GEMINI_API_KEY, ANTHROPIC_API_KEY, DR_WHATSAPP_NUMBER, EQUIPE_VIDEO_WHATSAPP_NUMBER, ADMIN_PASSWORD, PORT = 3000 } = process.env;
+// WHATSAPP_APP_SECRET: NOVA variável — "Chave secreta do app" no painel da Meta (Configurações do app >
+// Básico). Com ela o webhook só aceita requisições realmente assinadas pela Meta (ver verificarAssinaturaMeta()).
+const { WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WEBHOOK_VERIFY_TOKEN, WHATSAPP_APP_SECRET, SHEET_ID, KNOWLEDGE_SHEET_ID, GEMINI_API_KEY, ANTHROPIC_API_KEY, DR_WHATSAPP_NUMBER, EQUIPE_VIDEO_WHATSAPP_NUMBER, ADMIN_PASSWORD, PORT = 3000 } = process.env;
 const GRAPH_API_URL = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
 // Credenciais do Google: aceita tanto o arquivo credentials.json local (dev)
@@ -988,7 +994,7 @@ app.get('/webhook', (req, res) => {
 });
 
 // ===== 8) PAINEL DE CONVERSAS (visualização simples, protegida por senha) =====
-// Acesse: https://SEU-DOMINIO.up.railway.app/conversas?senha=SUA_SENHA
+// Acesse: https://SEU-DOMINIO.up.railway.app/conversas  (abre uma tela de login; a senha NÃO vai mais na URL)
 // A senha vem da variável de ambiente ADMIN_PASSWORD (configure no Railway).
 function escaparHTML(texto) {
   return (texto || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -998,9 +1004,104 @@ function jsonSeguroParaScript(dados) {
   return JSON.stringify(dados).replace(/</g, '\\u003c');
 }
 
-app.get('/conversas', async (req, res) => {
+// ----- Login do painel (cookie assinado, sem senha na URL) -----
+// Antes a senha ia em "?senha=..." e ficava no histórico do navegador, em logs do servidor e em
+// qualquer link compartilhado. Agora há uma tela de login; o servidor devolve um cookie
+// HttpOnly assinado (HMAC) e válido por 12h. Trocar ADMIN_PASSWORD invalida todos os logins.
+const SESSAO_PAINEL_MS = 12 * 60 * 60 * 1000;
+const COOKIE_PAINEL = 'bia_painel';
+const chaveCookiePainel = () => crypto.createHash('sha256').update('bia-painel:' + (ADMIN_PASSWORD || '')).digest();
+function assinarSessaoPainel(expiraEm) {
+  return expiraEm + '.' + crypto.createHmac('sha256', chaveCookiePainel()).update(String(expiraEm)).digest('hex');
+}
+function lerCookie(req, nome) {
+  for (const parte of String(req.headers.cookie || '').split(';')) {
+    const i = parte.indexOf('=');
+    if (i > 0 && parte.slice(0, i).trim() === nome) return decodeURIComponent(parte.slice(i + 1).trim());
+  }
+  return null;
+}
+function sessaoPainelValida(req) {
+  if (!ADMIN_PASSWORD) return false;
+  const valor = lerCookie(req, COOKIE_PAINEL);
+  if (!valor) return false;
+  const [expiraStr] = valor.split('.');
+  const expiraEm = Number(expiraStr);
+  if (!Number.isFinite(expiraEm) || expiraEm < Date.now()) return false;
+  const esperado = Buffer.from(assinarSessaoPainel(expiraEm));
+  const recebido = Buffer.from(valor);
+  return esperado.length === recebido.length && crypto.timingSafeEqual(esperado, recebido);
+}
+function senhaPainelConfere(tentativa) {
+  // Compara os hashes (tamanho fixo) em tempo constante, pra não vazar nada pelo tempo de resposta
+  const h = s => crypto.createHash('sha256').update(String(s)).digest();
+  return !!ADMIN_PASSWORD && crypto.timingSafeEqual(h(tentativa), h(ADMIN_PASSWORD));
+}
+// Limite de tentativas por IP: 5 erros a cada 15 min (guardado em memória)
+const tentativasLogin = new Map();
+const JANELA_LOGIN_MS = 15 * 60 * 1000;
+const MAX_ERROS_LOGIN = 5;
+function loginBloqueado(ip) {
+  const t = tentativasLogin.get(ip);
+  if (!t) return false;
+  if (Date.now() - t.inicio > JANELA_LOGIN_MS) { tentativasLogin.delete(ip); return false; }
+  return t.erros >= MAX_ERROS_LOGIN;
+}
+function registrarErroLogin(ip) {
+  const t = tentativasLogin.get(ip);
+  if (!t || Date.now() - t.inicio > JANELA_LOGIN_MS) tentativasLogin.set(ip, { inicio: Date.now(), erros: 1 });
+  else t.erros += 1;
+}
+function paginaLoginPainel(mensagem) {
+  return `<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex"><title>Entrar — Bia</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, sans-serif; background:#e5ddd5; display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; }
+  form { background:#fff; padding:28px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,.15); width:min(340px, 90vw); }
+  h1 { font-size:18px; margin:0 0 16px; color:#075e54; }
+  input, button { width:100%; padding:10px; font-size:16px; box-sizing:border-box; margin-top:10px; border-radius:6px; }
+  input { border:1px solid #ccc; }
+  button { background:#075e54; color:#fff; border:0; cursor:pointer; }
+  .erro { color:#b00020; font-size:14px; margin-top:10px; }
+</style></head><body>
+<form method="POST" action="/conversas/login">
+  <h1>Painel de conversas — Bia</h1>
+  <input type="password" name="senha" placeholder="Senha" autocomplete="current-password" autofocus required>
+  <button type="submit">Entrar</button>
+  ${mensagem ? `<div class="erro">${escaparHTML(mensagem)}</div>` : ''}
+</form></body></html>`;
+}
+function semCachePainel(res) {
+  res.set({ 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer' });
+}
+
+app.post('/conversas/login', express.urlencoded({ extended: false, limit: '2kb' }), (req, res) => {
+  semCachePainel(res);
   if (!ADMIN_PASSWORD) return res.status(500).send('Configure a variável ADMIN_PASSWORD no Railway pra habilitar essa página.');
-  if (req.query.senha !== ADMIN_PASSWORD) return res.status(401).send('Acesso negado. Use a URL com ?senha=SUA_SENHA no final.');
+  if (loginBloqueado(req.ip)) return res.status(429).send(paginaLoginPainel('Muitas tentativas. Aguarde 15 minutos e tente de novo.'));
+  if (!senhaPainelConfere(req.body?.senha || '')) {
+    registrarErroLogin(req.ip);
+    console.warn('Login do painel recusado (ip:', req.ip + ')');
+    return res.status(401).send(paginaLoginPainel('Senha incorreta.'));
+  }
+  tentativasLogin.delete(req.ip);
+  const expiraEm = Date.now() + SESSAO_PAINEL_MS;
+  const secure = req.secure ? '; Secure' : '';
+  res.set('Set-Cookie', `${COOKIE_PAINEL}=${encodeURIComponent(assinarSessaoPainel(expiraEm))}; HttpOnly; SameSite=Strict; Path=/conversas; Max-Age=${SESSAO_PAINEL_MS / 1000}${secure}`);
+  res.redirect(303, '/conversas');
+});
+
+app.get('/conversas/sair', (req, res) => {
+  semCachePainel(res);
+  res.set('Set-Cookie', `${COOKIE_PAINEL}=; HttpOnly; SameSite=Strict; Path=/conversas; Max-Age=0`);
+  res.redirect(303, '/conversas');
+});
+
+app.get('/conversas', async (req, res) => {
+  semCachePainel(res);
+  if (!ADMIN_PASSWORD) return res.status(500).send('Configure a variável ADMIN_PASSWORD no Railway pra habilitar essa página.');
+  if (!sessaoPainelValida(req)) return res.status(401).send(paginaLoginPainel(req.query.senha ? 'O link com senha na URL não funciona mais. Digite a senha abaixo.' : ''));
 
   try {
     const respSheet = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'A:D' });
@@ -1046,7 +1147,7 @@ app.get('/conversas', async (req, res) => {
 </head>
 <body>
 <div id="lista">
-  <h2>Conversas (${listaConversas.length})</h2>
+  <h2>Conversas (${listaConversas.length}) <a href="/conversas/sair" style="float:right; color:#fff; font-size:13px; font-weight:400;">Sair</a></h2>
   ${listaConversas.map((c, i) => `
     <div class="item" onclick="mostrar(${i})" id="item-${i}">
       <div class="nome">${escaparHTML(c.nome)}</div>
@@ -1128,7 +1229,33 @@ async function processarTexto(from, texto, nome) {
   }
 }
 
+// Confere se a requisição veio mesmo da Meta: ela assina o corpo com HMAC-SHA256 usando a chave
+// secreta do app e manda o resultado no cabeçalho "X-Hub-Signature-256" ("sha256=<hex>").
+// Sem isso, qualquer pessoa que descobrisse a URL poderia simular mensagens de pacientes.
+let avisouSemAppSecret = false;
+function verificarAssinaturaMeta(req) {
+  if (!WHATSAPP_APP_SECRET) {
+    // Sem a variável configurada não dá pra verificar. Aceita (pra não derrubar o atendimento num
+    // deploy sem a variável), mas avisa no log — a proteção só vale depois de configurar.
+    if (!avisouSemAppSecret) {
+      console.warn('⚠️ WHATSAPP_APP_SECRET não configurada: assinatura do webhook NÃO está sendo verificada.');
+      avisouSemAppSecret = true;
+    }
+    return true;
+  }
+  const recebida = String(req.get('x-hub-signature-256') || '');
+  if (!recebida.startsWith('sha256=') || !req.rawBody) return false;
+  const esperada = 'sha256=' + crypto.createHmac('sha256', WHATSAPP_APP_SECRET).update(req.rawBody).digest('hex');
+  const a = Buffer.from(recebida);
+  const b = Buffer.from(esperada);
+  return a.length === b.length && crypto.timingSafeEqual(a, b); // comparação em tempo constante
+}
+
 app.post('/webhook', async (req, res) => {
+  if (!verificarAssinaturaMeta(req)) {
+    console.warn('Webhook rejeitado: assinatura ausente ou inválida (ip:', req.ip + ')');
+    return res.sendStatus(403);
+  }
   res.sendStatus(200);
   try {
     const value = req.body.entry?.[0]?.changes?.[0]?.value;

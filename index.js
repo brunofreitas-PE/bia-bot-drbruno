@@ -50,6 +50,7 @@ const ARQ_SESSOES = path.join(DATA_DIR, 'sessoes.json');
 const ARQ_CONCLUIDOS = path.join(DATA_DIR, 'concluidos.json');
 const ARQ_RESERVAS = path.join(DATA_DIR, 'reservas.json');
 const ARQ_LEADS_FRIOS = path.join(DATA_DIR, 'leadsFrios.json');
+const ARQ_CONTATOS = path.join(DATA_DIR, 'contatos.json');
 
 function carregarJSON(arquivo, valorPadrao) {
   try {
@@ -67,6 +68,7 @@ function persistirTudo() {
   salvarJSON(ARQ_CONCLUIDOS, concluidos);
   salvarJSON(ARQ_RESERVAS, reservasHorario);
   salvarJSON(ARQ_LEADS_FRIOS, leadsFrios);
+  salvarJSON(ARQ_CONTATOS, contatosConhecidos);
 }
 
 // ===== POLÍTICA DE DADOS SENSÍVEIS (LGPD) =====
@@ -275,7 +277,16 @@ function extrairNome(texto) {
   return null;
 }
 const PALAVRAS_URGENCIA = ['dor de dente', 'estou com dor', 'quebrei', 'quebrou', 'inchaço', 'urgente'];
-const PALAVRAS_GRATUIDADE = ['de graça', 'gratis', 'grátis', 'de gratis', 'sem pagar', 'nao vou pagar', 'de brinde', 'desconto', 'mais barato'];
+// Pedidos de pausa: a pessoa NÃO recusou, só pediu pra esperar. Frases específicas de propósito
+// (palavras soltas como "depois" ou "agora" apareceriam em muitas frases normais).
+// Ficaram de fora de propósito: "uns dias" (aparece em "faz uns dias que dói"), "outro dia" e "semana que
+// vem" (podem ser pedidos de horário), "mais pra frente" (já é resposta válida da pergunta de urgência).
+const PALAVRAS_PAUSA = ['agora nao', 'mais uns dias', 'depois falo', 'depois eu falo', 'depois te falo', 'depois eu volto', 'quando eu puder', 'nao estou podendo', 'nao posso agora', 'nao e o momento', 'ainda nao posso', 'por enquanto nao', 'por inquanto'];
+const pedePausa = t => TEM(t, PALAVRAS_PAUSA);
+function mensagemPausa(nome) {
+  return `Sem problema${nome ? ', ' + nome : ''}! 😊 Quando for um bom momento pra você, é só me chamar aqui que a gente continua de onde parou. Se precisar de algo antes, estou por aqui 💙`;
+}
+const PALAVRAS_GRATUIDADE =['de graça', 'gratis', 'grátis', 'de gratis', 'sem pagar', 'nao vou pagar', 'de brinde', 'desconto', 'mais barato'];
 function responderGratuidade(nome) {
   const comNome = nome ? ', ' + nome : '';
   return `Entendo o interesse${comNome} 😊 Hoje não trabalhamos com tratamento gratuito, mas a *avaliação não tem nenhum custo nem compromisso* — você conhece o plano, os valores certinhos pro seu caso e decide com calma depois.\nE pra fechar, temos Pix, cartão ou 40% de entrada + até 10x sem juros, que costuma caber bem no orçamento 💳\nQuer que eu já reserve sua avaliação?`;
@@ -561,6 +572,13 @@ let reservasHorario = carregarJSON(ARQ_RESERVAS, []); // [{ texto, textoNormaliz
 // leadsFrios: quem não virou agendamento (recusou ou abandonou), aguardando follow-up automático
 // { [numero]: { nome, numero, tratamento, motivo, esfriouEm, enviados: { '24h': bool, '48h': bool, '72h': bool } } }
 let leadsFrios = carregarJSON(ARQ_LEADS_FRIOS, {});
+// contatosConhecidos: lembra o nome de quem já se apresentou, mesmo depois que a sessão some (agendou, ficou
+// 30 dias parado...). Assim a Bia nunca pergunta "qual seu nome?" de novo pra quem já falou com ela.
+// { [numero]: { nome, ts } }
+let contatosConhecidos = carregarJSON(ARQ_CONTATOS, {});
+function lembrarContato(numero, nome) {
+  if (numero && nome) contatosConhecidos[numero] = { nome, ts: Date.now() };
+}
 
 function registrarLeadFrio(numero, { nome, tratamento, motivo }) {
   leadsFrios[numero] = {
@@ -576,14 +594,21 @@ function registrarLeadFrio(numero, { nome, tratamento, motivo }) {
 // ===== FOLLOW-UP AUTOMÁTICO DENTRO DA JANELA DE 24H (texto livre, sem template) =====
 // Só funciona enquanto durar a janela de atendimento do WhatsApp (24h desde a última
 // mensagem do paciente). Depois disso, só reengaja com template aprovado pela Meta.
+// Quando a pessoa nunca disse um tratamento específico, o rótulo interno é "Outro assunto" — isso
+// NÃO deve aparecer pro paciente ("dúvida sobre Outro assunto" soa robótico). Nesses casos o texto
+// fica genérico, sem citar tratamento.
+const tratamentoGenerico = t => !t || t === 'Outro assunto' || t === 'nosso atendimento';
 function textoFollowup3h(nome, tratamento) {
-  return `Oi ${nome}! Vi que você ficou com uma dúvida sobre *${tratamento}* 😊 Ainda quer que eu te ajude a marcar a avaliação? Estou por aqui!`;
+  const sobre = tratamentoGenerico(tratamento) ? '' : ` sobre *${tratamento}*`;
+  return `Oi ${nome}! Vi que você ficou com uma dúvida${sobre} 😊 Ainda quer que eu te ajude a marcar a avaliação? Estou por aqui!`;
 }
 function textoFollowup8h(nome, tratamento) {
-  return `Oi ${nome}! Só passando pra saber se você ainda tem interesse em cuidar do(a) *${tratamento}* 💙 A avaliação com o Dr. Bruno não tem custo nem compromisso — quer que eu reserve um horário pra você?`;
+  const interesse = tratamentoGenerico(tratamento) ? 'em resolver o que te trouxe aqui' : `em cuidar do(a) *${tratamento}*`;
+  return `Oi ${nome}! Só passando pra saber se você ainda tem interesse ${interesse} 💙 A avaliação com o Dr. Bruno não tem custo nem compromisso — quer que eu reserve um horário pra você?`;
 }
 function textoFollowup20h(nome, tratamento) {
-  return `Oi ${nome}! Essa é a última vez que te chamo por hoje 😊 Se ainda quiser saber mais sobre *${tratamento}* ou marcar sua avaliação sem compromisso, é só responder por aqui.`;
+  const sobre = tratamentoGenerico(tratamento) ? 'tirar suas dúvidas' : `saber mais sobre *${tratamento}*`;
+  return `Oi ${nome}! Essa é a última vez que te chamo por hoje 😊 Se ainda quiser ${sobre} ou marcar sua avaliação sem compromisso, é só responder por aqui.`;
 }
 
 async function verificarFollowups() {
@@ -643,7 +668,9 @@ function verificarAbandonos() {
     if (!s.ultimaInteracao || agora - s.ultimaInteracao < TIMEOUT_ABANDONO_MS) continue;
     const espec = ESPECIALIDADES[s.espec] || ESPECIALIDADES.outro;
     registrarConversa(s.nome || 'Sem nome', from, `[BIA-ABANDONO] parou em "${s.step}" | interesse: ${espec.rotulo} | situacao: ${s.respostas?.situacao || '-'} | problema: ${s.respostas?.problema || '-'}`).catch(() => {});
-    registrarLeadFrio(from, { nome: s.nome, tratamento: espec.rotulo, motivo: 'abandono' });
+    // Se a pessoa pediu pra esperar ("agora não", "mais uns dias"), respeita: registra o abandono no
+    // CRM mas NÃO entra na fila de follow-ups automáticos.
+    if (!s.pausaFollowup) registrarLeadFrio(from, { nome: s.nome, tratamento: espec.rotulo, motivo: 'abandono' });
     // Mantém a sessão viva (não apaga mais) pra poder retomar de onde parou quando a pessoa voltar.
     s.abandonado = true;
   }
@@ -655,7 +682,9 @@ function iniciarFunil(numero, textoInicial, nomePerfil) {
   const especPrimeira = textoInicial ? identificarEspecialidade(textoInicial) : 'outro';
   const urgencia = textoInicial ? TEM(normalizar(textoInicial), PALAVRAS_URGENCIA) : false;
   const nomeReserva = primeiroNome(nomePerfil || '');
-  const nomeInicial = nomeReserva && nomeReserva !== 'Sem' ? nomeReserva : null;
+  // Prefere o nome que a própria pessoa já disse à Bia (contatosConhecidos) ao apelido do perfil do WhatsApp.
+  const nomeConhecido = contatosConhecidos[numero]?.nome || null;
+  const nomeInicial = nomeConhecido || (nomeReserva && nomeReserva !== 'Sem' ? nomeReserva : null);
   sessoes[numero] = { step: 'nome', nome: nomeInicial, respostas: {}, especPrevia: especPrimeira !== 'outro' ? especPrimeira : null, urgencia, ultimaInteracao: Date.now(), criadaEm: Date.now() };
   if (urgencia) {
     // Se o nome já veio do perfil do WhatsApp, pula direto pra etapa 'urgencia' — senão a
@@ -666,6 +695,10 @@ function iniciarFunil(numero, textoInicial, nomePerfil) {
       return `Olá, ${nomeInicial}! Que alegria receber seu contato 😊! Eu sou a *Bia*, assistente virtual da clínica do Dr. Bruno Freitas.\nSinto muito que esteja com dor 😟 — vamos resolver isso com prioridade!\nMe conta rapidinho o que está sentindo (desde quando dói, o que piora)? 🙏`;
     }
     return 'Olá! Que alegria receber seu contato 😊! Eu sou a *Bia*, assistente virtual da clínica do Dr. Bruno Freitas.\nSinto muito que esteja com dor 😟 — vamos resolver isso com prioridade!\nMe diz seu nome, por favor? 😊';
+  }
+  // Quem já se apresentou antes não precisa dizer o nome de novo.
+  if (nomeConhecido) {
+    return `Olá, ${nomeConhecido}! Que bom falar com você de novo 😊 Eu sou a *Bia*, assistente virtual da clínica do Dr. Bruno Freitas.\nMe conta: você gostaria de transformar o seu sorriso ou cuidar do seu rosto?`;
   }
   // Aviso de transparência (LGPD): deixa claro que é assistente virtual e como os dados são usados.
   return 'Olá! Que alegria receber seu contato 😊! Eu sou a *Bia*, assistente virtual da clínica do Dr. Bruno Freitas. Uso o que você me contar só para organizar seu atendimento, e a equipe pode acompanhar a conversa.\nQual seu nome? E me conta: você gostaria de transformar o seu sorriso ou cuidar do seu rosto?';
@@ -811,12 +844,20 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
   // Captura o nome ANTES de qualquer interceptação (urgência/preço/informações podem vir junto)
   if (s.step === 'nome' && !s.nome) {
     const tentativaNome = extrairNome(texto);
-    if (tentativaNome) s.nome = tentativaNome;
+    if (tentativaNome) { s.nome = tentativaNome; lembrarContato(from, tentativaNome); }
   }
 
   const espec = ESPECIALIDADES[s.espec] || ESPECIALIDADES.outro;
   const nomeAtual = s.nome || primeiroNome(nomePerfil);
   const especNaMsg = identificarEspecialidade(texto);
+
+  // Pedido de pausa ("agora não", "mais uns dias", "depois eu falo"): respeita, não insiste e
+  // tira a pessoa da fila de follow-ups automáticos (Método BF: nada de pressão).
+  if (pedePausa(t) && !TEM(t, PALAVRAS_URGENCIA)) {
+    s.pausaFollowup = true;
+    delete leadsFrios[from];
+    return enviar(mensagemPausa(nomeAtual));
+  }
 
   // "mais informações" funciona em QUALQUER etapa (desde que não cite outra especialidade)
   if (especNaMsg === 'outro' && TEM(t, ['informações', 'informacoes', 'mais inform', 'infor', 'quero saber mais', 'explica', 'como funciona', 'detalhe'])) {
@@ -864,7 +905,7 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
     case 'nome': {
       if (!s.nome) {
         const nomeExtraido = extrairNome(texto);
-        if (nomeExtraido) s.nome = nomeExtraido;
+        if (nomeExtraido) { s.nome = nomeExtraido; lembrarContato(from, nomeExtraido); }
       }
       if (!s.nome) return enviar(s.urgencia ? 'Me diz seu nome rapidinho que eu já priorizo sua urgência 😊' : 'Antes, me diz: com quem tenho o prazer de falar? 😊');
       // SESSÃO DE URGÊNCIA: com nome em mãos, retoma a DOR (não vai pro menu)
@@ -969,8 +1010,20 @@ async function flowFunil(from, texto, enviar, nomePerfil) {
         if (TEM(t, ['nao', 'ainda nao', 'agora nao', 'depois', 'nao consigo', 'nao da', 'outro dia'])) {
           return enviar(`Sem problema, ${s.nome}! 😊 Fico por aqui — é só me chamar quando quiser marcar sua avaliação. Qualquer dúvida, estou à disposição! 💙`);
         }
+        // Depois de 2 tentativas sem entender, para de repetir o mesmo pedido: avisa a equipe (uma
+        // única vez) pra ajudar a marcar. Antes o paciente ficava preso, ouvindo "não entendi" em loop.
+        s.agendaTentativas = (s.agendaTentativas || 0) + 1;
+        if (s.agendaTentativas >= 2) {
+          if (!s.handoffAgenda) {
+            s.handoffAgenda = true;
+            notificarHandoff({ nome: s.nome, numero: from, motivo: 'agenda', texto }).catch(() => {});
+            return enviar(`Vou pedir pra alguém da equipe te ajudar a marcar o melhor horário, ${s.nome} 😊 Já avisei e logo te chamam por aqui. Se preferir, pode me mandar o dia e a hora do seu jeito (ex: "sexta às 15h") que eu anoto!`);
+          }
+          return enviar(`A equipe já foi avisada, ${s.nome} 😊 Se quiser adiantar, me diz o dia e a hora (ex: "sexta às 15h") que eu anoto pra você.`);
+        }
         return enviar(`Não entendi direito, ${s.nome} 😅 Me diz um dia e horário (ex: "sexta às 15h" ou "25/09 às 14h") que eu já anoto pra você! 🗓️`);
       }
+      s.agendaTentativas = 0;
       const textoNormalizado = normalizar(texto).trim();
       const conflito = reservasHorario.find(r => r.textoNormalizado === textoNormalizado);
       await enviar(`📅 Anotado, ${s.nome}! Registrei: *${texto}*.\nO Dr. Bruno vai entrar em contato pra confirmar seu agendamento. Qualquer dúvida, estou por aqui! 😊💙`);
@@ -1376,16 +1429,28 @@ async function processarTexto(from, texto, nome) {
     sessoes[from].nome = primeiroNome(nome);
   }
   try {
+    const tNorm = normalizar(texto);
+    const quemPediuPausa = pedePausa(tNorm) && !TEM(tNorm, PALAVRAS_URGENCIA);
+    // Sem sessão ativa, um "agora não / mais uns dias" não deve abrir o funil só pra responder isso.
+    if (!sessoes[from] && quemPediuPausa) {
+      await enviar(mensagemPausa(contatosConhecidos[from]?.nome || ''));
+      return;
+    }
     if (sessoes[from]) {
       const s = sessoes[from];
-      if (s.abandonado) {
+      s.pausaFollowup = false; // voltou a conversar: a pausa anterior (se houve) acabou; flowFunil marca de novo se pedir outra
+      if (s.abandonado && !quemPediuPausa) {
         // Retomando uma conversa que tinha esfriado — reconhece o que a pessoa já tinha dito
         // em vez de começar o funil do zero, pra não fazer ela repetir tudo de novo.
         const espec = ESPECIALIDADES[s.espec] || ESPECIALIDADES.outro;
         const nomeAtual = s.nome ? `${s.nome}, ` : '';
         const trechoProblema = s.respostas?.problema ? ` Você tinha comentado sobre "${s.respostas.problema}".` : '';
-        await enviar(`Que bom te ver de novo, ${nomeAtual}vamos continuar! 😊 Vi que seu interesse era em *${espec.rotulo}*.${trechoProblema}`);
+        // "Outro assunto" é rótulo interno: só cita o tratamento quando a pessoa realmente escolheu um.
+        const trechoInteresse = tratamentoGenerico(espec.rotulo) ? '' : ` Vi que seu interesse era em *${espec.rotulo}*.`;
+        await enviar(`Que bom te ver de novo, ${nomeAtual}vamos continuar! 😊${trechoInteresse}${trechoProblema}`);
         s.abandonado = false;
+      } else if (s.abandonado) {
+        s.abandonado = false; // pediu pausa: não recomeça a conversa, só registra que voltou a falar
       }
       await flowFunil(from, texto, enviar, nome);
     } else {
@@ -1496,7 +1561,7 @@ async function sendTextMessage(to, body) {
 async function notificarHandoff({ nome, numero, motivo, texto }) {
   if (!DR_WHATSAPP_NUMBER) return;
   const numeroFormatado = numero.startsWith('55') ? `+${numero}` : numero;
-  const rotuloMotivo = { reclamacao: 'Reclamação/insatisfação', diagnostico: 'Pergunta clínica fora do escopo da Bia', humano: 'Pediu para falar com uma pessoa' }[motivo] || 'Fora do escopo da Bia';
+  const rotuloMotivo = { reclamacao: 'Reclamação/insatisfação', diagnostico: 'Pergunta clínica fora do escopo da Bia', humano: 'Pediu para falar com uma pessoa', agenda: 'Não conseguiu informar dia e horário pelo chat (a Bia não entendeu 2 vezes)' }[motivo] || 'Fora do escopo da Bia';
   const corpo = `🚨 *Handoff da Bia — precisa de atenção humana*\n\n👤 Paciente: ${nome || 'Sem nome'}\n📱 WhatsApp: ${numeroFormatado}\n📌 Motivo: ${rotuloMotivo}\n💬 Mensagem: "${(texto || '').slice(0, 200)}"\n\nA Bia já avisou o paciente que alguém vai continuar o atendimento.`;
   try {
     await sendTextMessage(DR_WHATSAPP_NUMBER, corpo);
@@ -1510,7 +1575,7 @@ async function notificarAgendamento({ nome, numero, tratamento, horario, conflit
   if (!DR_WHATSAPP_NUMBER) return; // variável não configurada, não tenta enviar
   const numeroFormatado = numero.startsWith('55') ? `+${numero}` : numero;
   const avisoConflito = conflito ? '\n\n⚠️ *Atenção:* já existe outro agendamento com o mesmo horário digitado — confira antes de confirmar.' : '';
-  const corpo = `🔔 *Novo agendamento pela Bia!*\n\n👤 Paciente: ${nome}\n📱 WhatsApp: ${numeroFormatado}\n🦷 Interesse: ${tratamento}\n🗓️ Horário informado: ${horario}${avisoConflito}\n\nManda uma mensagem de agradecimento pra ele(a) 😊`;
+  const corpo = `🔔 *Novo agendamento pela Bia!*\n\n👤 Paciente: ${nome}\n📱 WhatsApp: ${numeroFormatado}\n🦷 Interesse: ${tratamentoGenerico(tratamento) ? "não informado" : tratamento}\n🗓️ Horário informado: ${horario}${avisoConflito}\n\nManda uma mensagem de agradecimento pra ele(a) 😊`;
   try {
     await sendTextMessage(DR_WHATSAPP_NUMBER, corpo);
   } catch (err) {

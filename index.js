@@ -1116,9 +1116,25 @@ app.get('/conversas', async (req, res) => {
       conversas[numero].mensagens.push({ dataHora: dataHora || '', mensagem: mensagem || '' });
     }
 
+    // Ordena pela conversa mais recente primeiro. dataHora vem da planilha como texto
+    // "DD/MM/AAAA, HH:MM:SS" — comparar isso como string (localeCompare) dá ordem errada,
+    // porque o dia vem antes do mês e do ano (ex: "09/10/2026" fica, por ordem alfabética,
+    // antes de "25/09/2026", mesmo sendo uma data mais recente). Por isso convertemos pra
+    // timestamp de verdade antes de comparar.
+    function timestampDataHoraBR(dataHora) {
+      const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(String(dataHora || '').trim());
+      if (!m) return 0;
+      const [, dia, mes, ano, hora, minuto, segundo] = m;
+      return new Date(+ano, +mes - 1, +dia, +hora, +minuto, +(segundo || 0)).getTime() || 0;
+    }
+
     const listaConversas = Object.entries(conversas)
       .map(([numero, dados]) => ({ numero, ...dados }))
-      .sort((a, b) => (b.mensagens.length ? b.mensagens[b.mensagens.length - 1].dataHora : '').localeCompare(a.mensagens.length ? a.mensagens[a.mensagens.length - 1].dataHora : ''));
+      .sort((a, b) => {
+        const tsA = a.mensagens.length ? timestampDataHoraBR(a.mensagens[a.mensagens.length - 1].dataHora) : 0;
+        const tsB = b.mensagens.length ? timestampDataHoraBR(b.mensagens[b.mensagens.length - 1].dataHora) : 0;
+        return tsB - tsA;
+      });
 
     const html = `<!DOCTYPE html>
 <html lang="pt-BR">

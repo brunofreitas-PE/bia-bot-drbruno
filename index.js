@@ -1164,7 +1164,7 @@ app.get('/conversas', async (req, res) => {
 </head>
 <body>
 <div id="lista">
-  <h2>Conversas (${listaConversas.length}) <a href="/conversas/sair" style="float:right; color:#fff; font-size:13px; font-weight:400;">Sair</a></h2>
+  <h2>Conversas (${listaConversas.length}) <a href="/conversas/sair" style="float:right; color:#fff; font-size:13px; font-weight:400;">Sair</a><a href="/conversas/relatorio" style="float:right; color:#fff; font-size:13px; font-weight:400; margin-right:12px;">Relatório</a></h2>
   ${listaConversas.map((c, i) => `
     <div class="item" onclick="mostrar(${i})" id="item-${i}">
       <div class="nome">${escaparHTML(c.nome)}</div>
@@ -1196,6 +1196,167 @@ app.get('/conversas', async (req, res) => {
   } catch (err) {
     console.error('Erro ao gerar painel de conversas:', err.message);
     res.status(500).send('Erro ao carregar conversas: ' + err.message);
+  }
+});
+
+// ===== 8b) RELATÓRIO MENSAL (/conversas/relatorio) — os 5 números que provam o valor da Bia =====
+// Calculado a partir das duas planilhas que o bot já alimenta (conversas e aba "agendamentos").
+// Definições:
+//  1. Leads recebidos: números distintos cuja PRIMEIRA mensagem de paciente caiu no mês.
+//  2. Tempo até a 1ª resposta: da 1ª mensagem do paciente até a 1ª resposta da Bia (mediana e p90).
+//  3. Escolheram horário: leads do mês que chegaram a ter um registro [BIA-QUALIFICADO].
+//  4. Avaliações realizadas: agendamentos do mês com Status = "Avaliado" (coluna G, preenchida pela recepção).
+//  5. Casos fechados: agendamentos do mês com valor na coluna L ("Valor fechado (R$)", preenchida à mão).
+// Observação: as datas vêm do horário do servidor (toLocaleString sem fuso); perto da virada do mês
+// pode haver diferença de algumas horas. Não afeta o tempo de resposta (mesma régua nos dois lados).
+// <relatorio:inicio>
+function tsBR(dataHora) {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(String(dataHora || '').trim());
+  if (!m) return 0;
+  const [, dia, mes, ano, hora, minuto, segundo] = m;
+  return new Date(+ano, +mes - 1, +dia, +hora, +minuto, +(segundo || 0)).getTime() || 0;
+}
+function mesDe(ts) { const d = new Date(ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+function parseValorBR(v) {
+  let s = String(v ?? '').replace(/[^\d.,-]/g, '');
+  if (!s) return 0;
+  if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  else if (/^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, ''); // "12.000" = doze mil
+  const n = parseFloat(s);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+function percentil(valores, p) {
+  if (!valores.length) return null;
+  const v = [...valores].sort((a, b) => a - b);
+  const i = Math.min(v.length - 1, Math.ceil((p / 100) * v.length) - 1);
+  return v[Math.max(0, i)];
+}
+function calcularRelatorio(linhasConversas, linhasAgend, mes) {
+  const porNumero = new Map();
+  for (const l of linhasConversas || []) {
+    const [dataHora, , numero, mensagem] = l;
+    const num = String(numero || '').trim();
+    if (!/^\d+$/.test(num)) continue;
+    const ts = tsBR(dataHora);
+    if (!ts) continue;
+    const msg = String(mensagem || '');
+    let c = porNumero.get(num);
+    if (!c) { c = { pac: [], bia: [], qualificado: false, frio: false }; porNumero.set(num, c); }
+    if (msg.startsWith('🤖 ')) c.bia.push(ts);
+    else if (msg.startsWith('[BIA-QUALIFICADO]')) c.qualificado = true;
+    else if (msg.startsWith('[BIA-ABANDONO]') || msg.startsWith('[BIA-CAPTACAO]')) c.frio = true;
+    else if (!msg.startsWith('[BIA-')) c.pac.push(ts);
+  }
+  const meses = new Set();
+  const leads = [];
+  for (const c of porNumero.values()) {
+    if (!c.pac.length) continue;
+    const primeira = Math.min(...c.pac);
+    meses.add(mesDe(primeira));
+    if (mesDe(primeira) === mes) leads.push({ ...c, primeira });
+  }
+  const tempos = [];
+  for (const c of leads) {
+    const resp = c.bia.filter(t => t >= c.primeira);
+    if (resp.length) tempos.push((Math.min(...resp) - c.primeira) / 1000);
+  }
+  const agend = { agendados: 0, avaliados: 0, compareceram: 0, faltaram: 0, fechados: 0, valor: 0 };
+  for (const l of linhasAgend || []) {
+    const ts = tsBR(l[0]);
+    if (!ts) continue;
+    meses.add(mesDe(ts));
+    if (mesDe(ts) !== mes) continue;
+    agend.agendados += 1;
+    const status = String(l[6] || '').trim().toLowerCase();
+    if (status === 'avaliado') agend.avaliados += 1;
+    else if (status === 'compareceu') agend.compareceram += 1;
+    else if (status === 'faltou') agend.faltaram += 1;
+    const valor = parseValorBR(l[11]);
+    if (valor > 0) { agend.fechados += 1; agend.valor += valor; }
+  }
+  return {
+    mes,
+    meses: [...meses].sort().reverse(),
+    leads: leads.length,
+    engajaram: leads.filter(c => c.pac.length >= 2).length,
+    escolheramHorario: leads.filter(c => c.qualificado).length,
+    frios: leads.filter(c => c.frio && !c.qualificado).length,
+    respondidos: tempos.length,
+    tempoMediano: percentil(tempos, 50),
+    tempoP90: percentil(tempos, 90),
+    ...agend,
+  };
+}
+function fmtDuracao(seg) {
+  if (seg == null) return '—';
+  if (seg < 60) return Math.round(seg) + ' s';
+  const m = Math.floor(seg / 60), s = Math.round(seg % 60);
+  if (m < 60) return m + ' min' + (s ? ' ' + s + ' s' : '');
+  return Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
+}
+const fmtBRL = n => 'R$ ' + n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pct = (a, b) => (b ? Math.round((a / b) * 100) + '%' : '—');
+function paginaRelatorio(r) {
+  const opcoes = (r.meses.length ? r.meses : [r.mes]).map(m => `<option value="${escaparHTML(m)}"${m === r.mes ? ' selected' : ''}>${escaparHTML(m.slice(5) + '/' + m.slice(0, 4))}</option>`).join('');
+  const tile = (titulo, valor, nota) => `<div class="tile"><div class="t">${titulo}</div><div class="v">${valor}</div><div class="n">${nota}</div></div>`;
+  const semValor = r.agendados > 0 && r.fechados === 0
+    ? '<p class="aviso">Nenhum valor fechado encontrado. Para preencher, crie na aba <b>agendamentos</b> a coluna <b>L</b> ("Valor fechado (R$)") e digite o valor de cada caso fechado.</p>' : '';
+  return `<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex"><title>Relatório — Bia</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, sans-serif; background:#e5ddd5; margin:0; color:#111; }
+  header { background:#075e54; color:#fff; padding:14px 20px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; flex:1; }
+  header a { color:#fff; font-size:13px; }
+  main { max-width:900px; margin:0 auto; padding:20px; }
+  select { font-size:15px; padding:6px; border-radius:6px; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin:16px 0; }
+  .tile { background:#fff; border-radius:10px; padding:14px 16px; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+  .t { font-size:13px; color:#555; } .v { font-size:28px; font-weight:700; margin:4px 0; color:#075e54; } .n { font-size:12px; color:#777; }
+  table { background:#fff; border-collapse:collapse; width:100%; border-radius:10px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+  td, th { padding:10px 14px; text-align:left; border-bottom:1px solid #eee; font-size:14px; } th { background:#f5f5f5; }
+  .aviso { background:#fff8e1; padding:10px 14px; border-radius:8px; font-size:14px; }
+  .nota { font-size:12px; color:#555; margin-top:16px; }
+</style></head><body>
+<header><h1>Relatório mensal — Bia</h1><a href="/conversas">Conversas</a><a href="/conversas/sair">Sair</a></header>
+<main>
+<form method="GET" action="/conversas/relatorio">Mês: <select name="mes" onchange="this.form.submit()">${opcoes}</select></form>
+<div class="tiles">
+${tile('Leads recebidos', r.leads, 'números novos que falaram com a Bia no mês')}
+${tile('Tempo até a 1ª resposta', fmtDuracao(r.tempoMediano), `mediana · 9 em 10 respondidos em até ${fmtDuracao(r.tempoP90)}`)}
+${tile('Escolheram horário', r.escolheramHorario, pct(r.escolheramHorario, r.leads) + ' dos leads do mês')}
+${tile('Avaliações realizadas', r.avaliados, `de ${r.agendados} agendamentos no mês`)}
+${tile('Casos fechados', r.fechados ? fmtBRL(r.valor) : '—', r.fechados + ' caso(s) com valor informado')}
+</div>
+${semValor}
+<h3>Funil do mês</h3>
+<table>
+<tr><th>Etapa</th><th>Quantidade</th><th>% dos leads</th></tr>
+<tr><td>Leads recebidos</td><td>${r.leads}</td><td>100%</td></tr>
+<tr><td>Responderam mais de uma vez</td><td>${r.engajaram}</td><td>${pct(r.engajaram, r.leads)}</td></tr>
+<tr><td>Escolheram horário</td><td>${r.escolheramHorario}</td><td>${pct(r.escolheramHorario, r.leads)}</td></tr>
+<tr><td>Saíram do funil sem horário (esfriaram ou recusaram)</td><td>${r.frios}</td><td>${pct(r.frios, r.leads)}</td></tr>
+</table>
+<p class="nota">Leads = pessoas cuja primeira mensagem foi neste mês. Agendamentos, avaliações e valores vêm da aba "agendamentos" pela data do agendamento, então não são exatamente os mesmos leads da tabela acima. Dados agregados, sem nomes nem conversas. Horários seguem o relógio do servidor.</p>
+</main></body></html>`;
+}
+// <relatorio:fim>
+
+app.get('/conversas/relatorio', async (req, res) => {
+  semCachePainel(res);
+  if (!ADMIN_PASSWORD) return res.status(500).send('Configure a variável ADMIN_PASSWORD no Railway pra habilitar essa página.');
+  if (!sessaoPainelValida(req)) return res.status(401).send(paginaLoginPainel(''));
+  try {
+    const mes = /^\d{4}-\d{2}$/.test(String(req.query.mes || '')) ? String(req.query.mes) : mesDe(Date.now());
+    const [conv, agend] = await Promise.all([
+      sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: 'A:D' }),
+      sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${ABA_AGENDAMENTOS}!A2:L5000` }).catch(() => ({ data: { values: [] } })),
+    ]);
+    res.send(paginaRelatorio(calcularRelatorio(conv.data.values || [], agend.data.values || [], mes)));
+  } catch (err) {
+    console.error('Erro ao gerar relatório:', err.message);
+    res.status(500).send('Erro ao gerar o relatório: ' + err.message);
   }
 });
 
